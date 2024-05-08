@@ -9,6 +9,25 @@
 
 #define GRTC_SLEW_TICKS 10
 
+/**
+ * @brief Verify devicetree default configuration is correct.
+ */
+ZTEST(grtc, test_default_config)
+{
+	const struct grtc_config *config;
+	const struct device *dev = DEVICE_DT_GET(DT_NODELABEL(grtc));
+
+	zassert_not_null(dev);
+	config = dev->config;
+	zassert_not_null(config);
+
+	/* confirm default DT configuration */
+	uint16_t expected = 0x0127; // ??what for GRTC
+
+	zexpect_equal(expected, config->config, "0x%x != config (0x%x)",
+		expected, config->config);
+}
+
 ZTEST(nrf_grtc_timer, test_get_ticks)
 {
 	k_timeout_t t = K_MSEC(1);

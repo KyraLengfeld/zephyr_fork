@@ -14,8 +14,42 @@
 #include <zephyr/drivers/timer/nrf_grtc_timer.h>
 #include <nrfx_grtc.h>
 #include <zephyr/sys/math_extras.h>
+/* my_driver.c */
+#include <zephyr/drivers/some_api.h>
 
 #define GRTC_NODE DT_NODELABEL(grtc)
+
+// Do we need multiple instances of grtc-davice? (ex. spi_nrfx_spi has)
+
+/* Ensure that GRTC driver is enabled. */
+BUILD_ASSERT(DT_NODE_HAS_STATUS(GRTC_NODE, okay),
+	     "GRTC must be enabled");
+
+// OR?:
+
+// this is for using the device without PM:
+#if DT_NODE_HAS_STATUS(GRTC_NODE, okay)
+const struct device *const grtc_dev = DEVICE_DT_GET(GRTC_NODE);
+#else
+#error "Node is disabled"
+#endif
+
+/* Define data (RAM) and configuration (ROM) structures: */
+struct my_dev_data {
+/* per-device values to store in RAM */
+};
+struct my_dev_cfg {
+uint32_t freq; /* Just an example: initial clock frequency in Hz */
+/* other configuration to store in ROM */
+};
+
+/* Implement driver API functions (drivers/some_api.h callbacks): */
+static int my_driver_api_func1(const struct device *dev, uint32_t *foo) { /* ... */ }
+static int my_driver_api_func2(const struct device *dev, uint64_t bar) { /* ... */ }
+static struct some_api my_api_funcs = {
+.func1 = my_driver_api_func1,
+.func2 = my_driver_api_func2,
+};
 
 /* Ensure that GRTC properties in devicetree are defined correctly. */
 #if !DT_NODE_HAS_PROP(GRTC_NODE, owned_channels)
@@ -578,3 +612,63 @@ int nrf_grtc_timer_clock_driver_init(void)
 #else
 SYS_INIT(sys_clock_driver_init, PRE_KERNEL_2, CONFIG_SYSTEM_CLOCK_INIT_PRIORITY);
 #endif
+
+#ifdef CONFIG_PM_DEVICE
+static int grtc_nrfx_pm_action(const struct device *dev,
+                           enum pm_device_action *action)
+{
+	int ret = 0;
+
+    switch (action) {
+    case PM_DEVICE_ACTION_SUSPEND:
+		/* Whatever is needed to safely suspend GRTC*/
+        if (dev->data->initialized) {
+			nrfx_grtc_uninit(&dev->config->grtc);
+			dev->data->initialized = false;
+		}
+
+		ret = pinctrl_apply_state(dev->config->pcfg,
+					  PINCTRL_STATE_SLEEP);
+		if (ret < 0) {
+			return ret;
+		}
+        break;
+    case PM_DEVICE_ACTION_RESUME:
+        ret = pinctrl_apply_state(dev->config->pcfg,
+					  PINCTRL_STATE_DEFAULT);
+		if (ret < 0) {
+			return ret;
+		}
+		/* nrfx_grtc_init() will be called at configuration before
+		 * the next transfer.
+		 */
+        break;
+    default:
+        return -ENOTSUP;
+    }
+
+    return ret;
+}
+
+/* #include <zephyr/device.h> needed */
+int m_grtc_init(const struct device *dev)
+{
+	int dev_init_ret;
+	const struct device *dev;
+	/* OPTIONAL: mark device as suspended if it is physically suspended */
+	pm_device_init_suspended(dev);
+	/* enable device runtime power management */
+	dev_init_ret = pm_device_runtime_enable(dev);
+	if ((dev_init_ret < 0) && (dev_init_ret != -ENOSYS)) {
+		__ASSERT(false, "pm_device_runtime_enable failed.");
+	}
+}
+
+
+PM_DEVICE_DT_DEFINE(GRTC_NODE, grtc_nrfx_pm_action);
+
+DEVICE_DT_DEFINE(GRTC_NODE, &m_grtc_init,
+		    PM_DEVICE_DT_GET(GRTC_NODE), NULL, NULL, POST_KERNEL, //PRE_KERNEL_2?
+		    CONFIG_KERNEL_INIT_PRIORITY_DEVICE, NULL);
+
+#endif /* CONFIG_PM_DEVICE */
