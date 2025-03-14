@@ -69,36 +69,52 @@ extern "C" {
  */
 #define BT_LE_LOCAL_SUPPORTED_FEATURES_SIZE 8
 
-/** Opaque type representing an advertiser. */
+/** @brief Opaque type representing an advertiser. */
 struct bt_le_ext_adv;
 
-/** Opaque type representing an periodic advertising sync. */
+/** @brief Opaque type representing an periodic advertising sync. */
 struct bt_le_per_adv_sync;
 
-/* Don't require everyone to include conn.h */
+/** @brief Don't require everyone to include conn.h */
 struct bt_conn;
 
-/* Don't require everyone to include iso.h */
+/** @brief Don't require everyone to include iso.h */
 struct bt_iso_biginfo;
 
-/* Don't require everyone to include direction.h */
+/** @brief Don't require everyone to include direction.h */
 struct bt_df_per_adv_sync_iq_samples_report;
 
+/**
+ * @brief Info of the advertising sent event.
+ * @details To be used in @ref bt_le_ext_adv_cb.
+ */
 struct bt_le_ext_adv_sent_info {
 	/** The number of advertising events completed. */
 	uint8_t num_sent;
 };
 
+/**
+ * @brief Info of the advertising connected event.
+ * @details To be used in @ref bt_le_ext_adv_cb.
+ */
 struct bt_le_ext_adv_connected_info {
 	/** Connection object of the new connection */
 	struct bt_conn *conn;
 };
 
+/**
+ * @brief Info of the advertising scanned event.
+ * @details To be used in @ref bt_le_ext_adv_cb.
+ */
 struct bt_le_ext_adv_scanned_info {
 	/** Active scanner LE address and type */
 	bt_addr_le_t *addr;
 };
 
+/**
+ * @brief Info of the PAwR subevents.
+ * @details To be used in @ref bt_le_ext_adv_cb.
+ */
 struct bt_le_per_adv_data_request {
 	/** The first subevent data can be set for */
 	uint8_t start;
@@ -107,6 +123,10 @@ struct bt_le_per_adv_data_request {
 	uint8_t count;
 };
 
+/**
+ * @brief Info about the PAwR responses received.
+ * @details To be used in @ref bt_le_ext_adv_cb.
+ */
 struct bt_le_per_adv_response_info {
 	/** The subevent the response was received in */
 	uint8_t subevent;
@@ -167,7 +187,7 @@ struct bt_le_ext_adv_cb {
 	 * packet.
 	 *
 	 * @param adv  The advertising set object.
-	 * @param addr Information about the scanned event.
+	 * @param info Information about the scanned event, namely the address.
 	 */
 	void (*scanned)(struct bt_le_ext_adv *adv,
 			struct bt_le_ext_adv_scanned_info *info);
@@ -176,13 +196,13 @@ struct bt_le_ext_adv_cb {
 	/**
 	 * @brief The RPA validity of the advertising set has expired.
 	 *
-	 * This callback notifies the application that the RPA validity of
-	 * the advertising set has expired. The user can use this callback
-	 * to synchronize the advertising payload update with the RPA rotation.
+	 * This callback notifies the application that the RPA validity of the advertising set has
+	 * expired. The user can use this callback to synchronize the advertising payload update
+	 * with the RPA rotation by for example envoking @ref bt_le_ext_adv_set_data upon callback.
 	 *
-	 * If rpa sharing is enabled and rpa expired cb of any adv-sets belonging
-	 * to same adv id returns false, then adv-sets will continue with old rpa
-	 * through out the rpa rotations.
+	 * If rpa sharing is enabled (see @kconfig{CONFIG_BT_RPA_SHARING}) and the rpa expired cb of
+	 * any adv-sets belonging to same adv id returns false, then adv-sets will continue with the
+	 * old rpa throughout the rpa rotations.
 	 *
 	 * @param adv  The advertising set object.
 	 *
@@ -194,7 +214,7 @@ struct bt_le_ext_adv_cb {
 
 #if defined(CONFIG_BT_PER_ADV_RSP)
 	/**
-	 * @brief The Controller indicates it is ready to transmit one or more subevent.
+	 * @brief The Controller indicates it is ready to transmit one or more PAwR subevents.
 	 *
 	 * This callback notifies the application that the controller has requested
 	 * data for upcoming subevents.
