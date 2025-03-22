@@ -198,27 +198,180 @@ def find_usage_of_funcs(target_function, lookup_table):
 
     return function_calls
 
+def extract_multiline_function_name(func_description, lines, start_idx):
+    """Extracts a multiline function definition by appending lines until encountering ');'."""
+    i = start_idx
+    while i < len(lines):
+        line = lines[i].strip()
 
-# go through group by group and save functions in group
-def save_function_names(header_path, are_groups, lookup_table):
+        if ");" in line:
+            func_description += " " + line.strip()
+            break
+        else:
+            func_description += " " + line.strip()
+
+        i += 1  # Move to the next line
+
+    return func_description
+
+def extract_function_name(function_line):
     """
-    Extracts functions from a header file, categorizes them into groups,
-    and tracks where they are used.
+    Extracts the function name from a function signature by removing C data types.
 
-    :param header_path: The file path of the header file being analyzed.
-    :param are_groups: Boolean indicating whether the header file contains @defgroup sections.
-    :param lookup_table: List of function calls found in source files.
-    :return: A dictionary mapping groups to functions and their usage paths,
-             and an updated lookup_table with found function calls removed.
+    :param function_line: The function signature as a string.
+    :return: The extracted function name.
+    """
+    c_types = ['static', 'extern', 'register', 'auto', 'inline', 'int', 'short', 'long',
+               'signed', 'unsigned', 'char', 'bool', 'uint8_t', 'uint16_t', 'uint32_t',
+               'uint64_t', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'float', 'double',
+               'long double', 'void', '_Bool', 'volatile', 'const', 'restrict']
+
+    for keyword in sorted(c_types, key=len, reverse=True):
+        function_line = re.sub(r'\b' + re.escape(keyword) + r'\b', '', function_line)
+
+    function_name = function_line.strip().split('(')[0].strip()
+    return function_name
+
+def get_brief_comment(lines, current_line, function_name):
+    """
+    Searches for the nearest @brief or block comment above a function definition.
+    Processes the comment block, checking for @file or @group to determine if it
+    should be used as the function description.
+
+    :param lines: List of all lines in the file.
+    :param current_line: The line number where the function is defined.
+    :param function_name: The name of the function.
+    :return: Extracted description or function name as a fallback.
+    """
+    function_description = function_name.replace('_', ' ')  # Default to function name as description
+    temp_description = None  # To temporarily store valid comment description
+    local_curr_line = current_line
+
+    for i in range(current_line - 1, -1, -1):  # Loop upwards through the file
+        line = lines[i].strip()
+        # Check if it's the start of a comment block
+        if line.startswith('/*') or line.startswith('/**'):
+            temp_description = re.sub(r'/\*\*?|\*/', '', line).strip()  # Remove block comment markers
+            not_func_comment = False
+            local_curr_line = i
+            for local_curr_line in range(local_curr_line, current_line + 1, 1):
+                block_line = lines[local_curr_line].strip()
+                # Check if @file or @group exists within this comment block
+                if "@file" in block_line or "@group" in block_line:
+                    not_func_comment = True
+                    break
+
+            if not_func_comment:
+                break
+            # Process the description if no @file/@group is found
+            if "@brief" in temp_description:
+                temp_description = temp_description.replace('@brief', '').strip()
+
+            # Save only the first sentence (or the entire line if no period)
+            temp_description = temp_description.split('.')[0] if '.' in temp_description else temp_description
+
+            # If we have a valid description, set it as the function description
+            if temp_description:
+                function_description = temp_description
+                break
+
+        # If a function declaration or end of comment block is reached, break
+        elif ');' in line:
+            break
+
+    # Return the description, falling back to the function name if no description is found
+    return function_description
+
+def get_params(lines, function_line):
+    """
+    Extracts function parameters and their descriptions from preceding comments.
+
+    :param lines: List of lines from a source file.
+    :param function_line: The index of the function definition line.
+    :return: Dictionary of parameters with their types and descriptions.
+    """
+    function_signature = ''
+
+    # Start from the function definition and accumulate the full parameter list
+    for i in range(function_line, len(lines)):
+        line = lines[i].strip()
+
+        # If we are at the function definition line
+        if i == function_line:
+            if ");" in line:
+                # Single-line function definition
+                params_part = line.split('(')[1].split(')')[0]
+                function_signature += params_part
+                break  # Done parsing parameters
+            else:
+                # Multi-line function, start accumulating
+                params_part = line.split('(')[1]
+                function_signature += params_part
+                continue
+
+        elif ");" in line:
+            # End of function parameter list
+            params_part = line.split(')')[0]  # Everything up to the closing bracket
+            function_signature += ' ' + params_part
+            break  # Stop processing
+
+        else:
+            # Accumulate multi-line parameters
+            function_signature += ' ' + line.strip()
+
+    # Normalize whitespace
+    function_signature = re.sub(r'\s+', ' ', function_signature).strip()
+
+    # Split parameters by commas (handling cases like `int (*func)(int, float)` correctly)
+    raw_params = function_signature.split(',')
+    cleaned_params = [param.strip() for param in raw_params]
+
+    # Extract parameter names (including pointers and array indicators)
+    function_params = {}
+    for param in cleaned_params:
+        words = param.split()
+        if len(words) > 1:
+            last_word = words[-1]  # Last word is typically the variable name
+            function_params[last_word] = param  # Store full declaration
+
+    # Now, search for @param descriptions in the preceding comment block
+    for i in range(function_line - 1, -1, -1):  # Loop upwards through the file
+        line = lines[i].strip()
+
+        if line.startswith('/*') or line.startswith('/**'):
+            break  # Stop when reaching start of comment block
+        elif ');' in line:
+            break  # Stop if another function is encountered
+
+        # Match @param comments
+        for param_name in function_params.keys():
+            match = re.search(rf'@param\s+{re.escape(param_name)}\s+(.*)', line)
+            if match:
+                description = match.group(1).strip()
+                function_params[param_name] = {
+                    'param': function_params[param_name],
+                    'description': description
+                }
+                print(f"{description}")
+
+    return function_params
+
+def layer_group_func_info_get(header_path, are_groups):
+    """
+    Parses a C header file to extract function details, ensuring only valid function definitions are captured.
+
+    :param header_path: Path to the header file.
+    :param are_groups: Boolean flag indicating whether groups are present in the file.
+    :return: Dictionary mapping groups to functions and their metadata.
     """
     groups = {}
     idx_groups = 0
     group_key = None
 
-    # Open the file for reading
     with open(header_path, 'r') as file:
+        lines = file.readlines()
+
         if not are_groups:
-            # If there are no groups, create a single group named after the file
             file_name = os.path.basename(header_path)
             group_key = 'group_0'
             groups[group_key] = {
@@ -227,68 +380,53 @@ def save_function_names(header_path, are_groups, lookup_table):
                 'functions': []
             }
 
-        # go line by line, until you find "@defgroup" in the file
-        for line in file:
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
 
-            # Look for lines containing '@defgroup'
             if are_groups and '@defgroup' in line:
-                # Extract the group name by removing the '@defgroup' part
                 group_name = line.replace(' * @defgroup', '').strip()
                 if group_name:
-                    # Increment group index and create a new group key
                     idx_groups += 1
                     group_key = f'group_{idx_groups}'
-                    # Initialize the group in the dictionary
                     groups[group_key] = {
                         'name': group_name,
                         'header_path': header_path,
                         'functions': []
                     }
-            elif group_key and re.search(r'.*\(.*\);', line):
-                if re.search(r'\b(memset|return|typedef|\)\()\b', line):
+            elif group_key and '(' in line:
+                if '=' in line or 'typedef' in line or line.startswith('#define') or line.startswith('return') or "{" in line:
+                    i += 1
                     continue
-                else:
-                    # function found in group
-                    line = line.lstrip()
-                    current_function = line
 
-                    # Match everything from the start up to the first '*' (only if '*' appears before '(')
-                    match = re.match(r'^[^(\n]*\*\s*(.*)', line)
-                    if match:
-                        line = match.group(1)  # Keep everything after '*'
+                full_function = line
 
-                    # Remove C data types and extract function name
-                    c_types = [
-                        'static', 'extern', 'register', 'auto', 'inline', 'int', 'short', 'long',
-                        'signed', 'unsigned', 'char', 'bool', 'uint8_t', 'uint16_t', 'uint32_t',
-                        'uint64_t', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'float', 'double',
-                        'long double', 'void', '_Bool', 'volatile', 'const', 'restrict'
-                    ]
+                # multiline definition
+                if ");" not in line:
+                    full_function = extract_multiline_function_name(full_function, lines, i)
 
-                    # Remove C types from the line
-                    for keyword in sorted(c_types, key=len, reverse=True):  # Sort by length to avoid partial replacements
-                        line = re.sub(r'\b' + re.escape(keyword) + r'\b', '', line)
+                # Extract function name
+                function_name = extract_function_name(line)
 
-                    # remove all white spaces
-                    function_name = line.strip()
+                # Ensure function name is entirely lowercase before '('
+                if not function_name.islower():
+                    i += 1
+                    continue
 
-                    # Save the result in function_name
-                    function_name = function_name.split("(")[0]
-                    function_name = function_name.rstrip("\n")
+                # Extract function description from preceding comments
+                func_description = get_brief_comment(lines, i, function_name)
 
-                    # Find where this function is used
-                    func_paths_and_lines = find_usage_of_funcs(function_name, lookup_table)
-                    #TODO remove currently found info (and only that) from the lookup table
+                # Extract function parameters and their descriptions
+                params = get_params(lines, i)
 
-                    # Categorize paths with line numbers
-                    categorized_paths = categorize_paths(func_paths_and_lines[function_name])
-
-                    # Add function with usage paths to the dictionary
-                    groups[group_key]['functions'].append({'name': current_function, 'usage_paths': categorized_paths})
-                    #TODO does this work with the header_path being connected to the group as well?
-
-
-    return groups, lookup_table
+                groups[group_key]['functions'].append({
+                    'function': full_function,
+                    'func_name': function_name,
+                    'description': func_description,
+                    'parameters': params
+                })
+            i += 1
+    return groups
 
 def main():
     # Input the layer you're looking for
@@ -303,95 +441,112 @@ def main():
     print("This might take a minute if you run this the first time for this layer.")
 
     # search for function calls in the current directory
-    directory = "."  # current directory
-    lookup_table = find_function_calls(directory, layer, header_list)
+    # directory = "."  # current directory
+    # lookup_table = find_function_calls(directory, layer, header_list)
     print("Work Space searched through . . .")
 
     all_groups = {}
     for header in header_list:
         if contains_groups(header):
-            groups_info, lookup_table = save_function_names(header, True, lookup_table)
+            groups_info = layer_group_func_info_get(header, True)
         else:
-            groups_info, lookup_table = save_function_names(header, False, lookup_table)
+            groups_info = layer_group_func_info_get(header, False)
         all_groups.update(groups_info)
 
-    print("Matched functions to workspace database . . .")
+    # Save the all_groups to a file
+    all_groups_file = f"{layer}.txt"
+    with open(all_groups_file, "w", encoding="utf-8") as file:
+        json.dump(all_groups, file, indent=4)
 
-    # printing
-    general_filename = f"{layer}_functions.txt"
+    # all_groups = {}
+    # for header in header_list:
+    #     if contains_groups(header):
+    #         groups_info, lookup_table = save_function_names(header, True, lookup_table)
+    #     else:
+    #         groups_info, lookup_table = save_function_names(header, False, lookup_table)
+    #     all_groups.update(groups_info)
 
-    with open(general_filename, "w") as output_file:
-        for group, details in all_groups.items():
-            output_file.write(f"=== {details['name']} ({details['header_path']}) ===\n")
-            output_file.write("\n")
+    # print("Matched functions to workspace database . . .")
 
-            for function in details['functions']:
-                output_file.write(f"  function: {function['name']}")  # Print function name
-                output_file.write("\n")
-                for subgroup, paths in function['usage_paths'].items():
-                    if paths:
-                        output_file.write(f"    {subgroup}:\n")
-                        for path in paths:
-                            output_file.write(f"      {path}\n")
-                    output_file.write("\n")
-                output_file.write("\n")
+    # # Generate UML sequence diagram
+    # generate_uml_sequence_diagram(lookup_table, layer)
 
-    print(f"Output saved to {general_filename}")
 
-    # Define the filename for output based on the layer variable
-    layers_filename = f"{layer}_functions_by_layers.txt"
+    # # printing
+    # general_filename = f"{layer}_functions.txt"
 
-    # Open the file for writing
-    with open(layers_filename, "w") as output_file:
+    # with open(general_filename, "w") as output_file:
+    #     for group, details in all_groups.items():
+    #         output_file.write(f"=== {details['name']} ({details['header_path']}) ===\n")
+    #         output_file.write("\n")
 
-        output_file.write("Functions sorted by all_layers:\n\n")
+    #         for function in details['functions']:
+    #             output_file.write(f"  function: {function['name']}")  # Print function name
+    #             output_file.write("\n")
+    #             for subgroup, paths in function['usage_paths'].items():
+    #                 if paths:
+    #                     output_file.write(f"    {subgroup}:\n")
+    #                     for path in paths:
+    #                         output_file.write(f"      {path}\n")
+    #                 output_file.write("\n")
+    #             output_file.write("\n")
 
-        # Collect all possible layers dynamically by scanning the usage_paths of functions
-        all_layers = set()
-        for group in all_groups.values():
-            for function in group['functions']:
-                all_layers.update(function['usage_paths'].keys())
+    # print(f"Output saved to {general_filename}")
 
-        # Iterate through each subgroup (layer)
-        for subgroup in sorted(all_layers):
-            output_file.write(f"=== {subgroup} ===\n\n")
+    # # Define the filename for output based on the layer variable
+    # layers_filename = f"{layer}_functions_by_layers.txt"
 
-            # Track if any function is found in this subgroup for any group
-            found_any_function_in_subgroup = False
+    # # Open the file for writing
+    # with open(layers_filename, "w") as output_file:
 
-            # Iterate over each group
-            for group_name, group_details in all_groups.items():
-                relevant_functions = []  # Track relevant functions for the subgroup in this group
+    #     output_file.write("Functions sorted by all_layers:\n\n")
 
-                # Find all functions in the group that are associated with this subgroup
-                for function in group_details['functions']:
-                    if subgroup in function['usage_paths'] and function['usage_paths'][subgroup]:
-                        relevant_functions.append(function)
+    #     # Collect all possible layers dynamically by scanning the usage_paths of functions
+    #     all_layers = set()
+    #     for group in all_groups.values():
+    #         for function in group['functions']:
+    #             all_layers.update(function['usage_paths'].keys())
 
-                if not relevant_functions:
-                    continue  # Skip the rest and move to the next group
+    #     # Iterate through each subgroup (layer)
+    #     for subgroup in sorted(all_layers):
+    #         output_file.write(f"=== {subgroup} ===\n\n")
 
-                # If there are relevant functions, print the group name and path
-                found_any_function_in_subgroup = True
-                output_file.write(f"Group: {group_details['name']} ({group_details['header_path']})\n\n")
+    #         # Track if any function is found in this subgroup for any group
+    #         found_any_function_in_subgroup = False
 
-                # For each relevant function in the group
-                for function in relevant_functions:
-                    output_file.write(f"  {function['name']}\n")  # Function name
+    #         # Iterate over each group
+    #         for group_name, group_details in all_groups.items():
+    #             relevant_functions = []  # Track relevant functions for the subgroup in this group
 
-                    # Print all paths associated with this function and subgroup
-                    for path in function['usage_paths'][subgroup]:
-                        output_file.write(f"      {path}\n")  # Indented paths
+    #             # Find all functions in the group that are associated with this subgroup
+    #             for function in group_details['functions']:
+    #                 if subgroup in function['usage_paths'] and function['usage_paths'][subgroup]:
+    #                     relevant_functions.append(function)
 
-                    output_file.write("\n")  # Add an empty line after each function's paths
+    #             if not relevant_functions:
+    #                 continue  # Skip the rest and move to the next group
 
-            # If no functions were found for any group in this subgroup, write a message
-            if not found_any_function_in_subgroup:
-                output_file.write(f"  (No functions found for {subgroup})\n\n")
+    #             # If there are relevant functions, print the group name and path
+    #             found_any_function_in_subgroup = True
+    #             output_file.write(f"Group: {group_details['name']} ({group_details['header_path']})\n\n")
 
-            output_file.write("\n")  # Add a space between subgroups
+    #             # For each relevant function in the group
+    #             for function in relevant_functions:
+    #                 output_file.write(f"  {function['name']}\n")  # Function name
 
-    print(f"Output saved to {layers_filename}")
+    #                 # Print all paths associated with this function and subgroup
+    #                 for path in function['usage_paths'][subgroup]:
+    #                     output_file.write(f"      {path}\n")  # Indented paths
+
+    #                 output_file.write("\n")  # Add an empty line after each function's paths
+
+    #         # If no functions were found for any group in this subgroup, write a message
+    #         if not found_any_function_in_subgroup:
+    #             output_file.write(f"  (No functions found for {subgroup})\n\n")
+
+    #         output_file.write("\n")  # Add a space between subgroups
+
+    # print(f"Output saved to {layers_filename}")
 
 
 
