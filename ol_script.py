@@ -49,17 +49,6 @@ def find_function_calls(directory, layer, ignore_paths):
 
     function_call_pattern = re.compile(r'\s*([a-z0-9_]*' + re.escape(layer) + r'[a-z0-9_]*)\s*\(.*\)\s*;')
 
-    # Check if lookup table already exists
-    lookup_table_file = f"{layer}.txt"
-    if os.path.exists(lookup_table_file):
-        try:
-            with open(lookup_table_file, "r", encoding="utf-8") as file:
-                lookup_table = json.load(file)  # Load the existing lookup table
-            print("Loaded existing lookup table from file.")
-            return lookup_table  # Return early to avoid re-scanning
-        except (json.JSONDecodeError, IOError):
-            print("Lookup table file is corrupted or unreadable. Regenerating...")
-
     # Use grep to search for function calls efficiently
     try:
         grep_command = f'grep -rnE "\\b[a-zA-Z0-9_]*{layer}[a-zA-Z0-9_]*\\s*\\(.*\\)\\s*;" {directory} --include="*.c" --include="*.h"'
@@ -89,10 +78,6 @@ def find_function_calls(directory, layer, ignore_paths):
 
     except Exception as e:
         print(f"Error running grep command: {e}")
-
-    # Save the newly generated lookup table
-    with open(lookup_table_file, "w", encoding="utf-8") as file:
-        json.dump(lookup_table, file, indent=4)
 
     print("Lookup table generated and saved to file.")
 
@@ -290,34 +275,7 @@ def save_function_names(header_path, are_groups, lookup_table):
 
     return groups, lookup_table
 
-def main():
-    # Input the layer you're looking for
-    layer = input("Enter the word to search for in header filenames (e.g., 'gatt'): ")
-
-    # Get the list of header files containing the word
-    header_list = find_headers(layer)
-    if not header_list:
-        print("There are no headers fitting to this, mistyped? Try again.")
-        return
-    print("Processing.")
-    print("This might take a minute if you run this the first time for this layer.")
-
-    # search for function calls in the current directory
-    directory = "."  # current directory
-    lookup_table = find_function_calls(directory, layer, header_list)
-    print("Work Space searched through . . .")
-
-    all_groups = {}
-    for header in header_list:
-        if contains_groups(header):
-            groups_info, lookup_table = save_function_names(header, True, lookup_table)
-        else:
-            groups_info, lookup_table = save_function_names(header, False, lookup_table)
-        all_groups.update(groups_info)
-
-    print("Matched functions to workspace database . . .")
-
-    # printing
+def print_functions_simple(all_groups, layer):
     general_filename = f"{layer}_functions.txt"
 
     with open(general_filename, "w") as output_file:
@@ -338,6 +296,7 @@ def main():
 
     print(f"Output saved to {general_filename}")
 
+def print_functions_moduels(all_groups, layer):
     # Define the filename for output based on the layer variable
     layers_filename = f"{layer}_functions_by_layers.txt"
 
@@ -393,6 +352,47 @@ def main():
 
     print(f"Output saved to {layers_filename}")
 
+def main():
+    # Input the layer you're looking for
+    layer = input("Enter the word to search for in header filenames (e.g., 'gatt'): ")
+
+    # Get the list of header files containing the word
+    header_list = find_headers(layer)
+    if not header_list:
+        print("There are no headers fitting to this, mistyped? Try again.")
+        return
+    print("Processing workspace")
+
+    # search for function calls in the current directory
+    directory = "."  # current directory
+    lookup_table = find_function_calls(directory, layer, header_list)
+    # Save the newly generated lookup table
+    lookup_table_file = f"lookup_{layer}.txt"
+    with open(lookup_table_file, "w", encoding="utf-8") as file:
+        json.dump(lookup_table, file, indent=4)
+
+    print("Work Space searched through . . .")
+
+    # extract function in {layer} headers and match them with lookup table info,
+    # remove from lookup table after processed
+    all_groups = {}
+    for header in header_list:
+        if contains_groups(header):
+            groups_info, lookup_table = save_function_names(header, True, lookup_table)
+        else:
+            groups_info, lookup_table = save_function_names(header, False, lookup_table)
+        all_groups.update(groups_info)
+    # Save the newly generated lookup table
+    all_groups_file = f"all_groups_{layer}.txt"
+    with open(all_groups_file, "w", encoding="utf-8") as file:
+        json.dump(all_groups, file, indent=4)
+
+    print("Matched functions to workspace database . . .")
+
+    # printing
+    print_functions_simple(all_groups, layer)
+
+    print_functions_moduels(all_groups, layer)
 
 
 # Run the script if executed directly
