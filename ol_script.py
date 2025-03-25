@@ -11,6 +11,7 @@ BLOCK_COMMENT_END_PATTERN = re.compile(r'\*/')
 grouped_paths = {
         "SAMPLE": [],
         "L2CAP": [],
+        "GAP": [],
         "GATT": [],
         "ATT": [],
         "SMP": [],
@@ -62,6 +63,9 @@ def find_function_calls(directory, layer, ignore_paths):
             line_number = int(line_number.strip())
 
             if any(ignore_path in file_path for ignore_path in ignore_paths):
+                continue
+
+            if "test" in file_path or "mock" in file_path or f"{layer}" in file_path:
                 continue
 
             match_call = function_call_pattern.search(code_line)
@@ -394,11 +398,12 @@ def print_functions_moduels(all_groups, layer):
 
         output_file.write("Functions sorted by all_layers:\n\n")
 
-        # Collect all possible layers dynamically by scanning the usage_paths of functions
+        # Collect all possible layers dynamically by scanning non-empty usage_paths of functions
         all_layers = set()
         for group in all_groups.values():
             for function in group['functions']:
-                all_layers.update(function['usage_paths'].keys())
+                valid_layers = {key for key, paths in function['usage_paths'].items() if paths}  # Only include non-empty paths
+                all_layers.update(valid_layers)
 
         # Iterate through each subgroup (layer)
         for subgroup in sorted(all_layers):
@@ -413,6 +418,7 @@ def print_functions_moduels(all_groups, layer):
 
                 # Find all functions in the group that are associated with this subgroup
                 for function in group_details['functions']:
+                    # Check if the subgroup exists and if it has any valid paths
                     if subgroup in function['usage_paths'] and function['usage_paths'][subgroup]:
                         relevant_functions.append(function)
 
@@ -425,6 +431,7 @@ def print_functions_moduels(all_groups, layer):
 
                 # For each relevant function in the group
                 for function in relevant_functions:
+                    output_file.write(f"  function name: {function['func_name']}\n")  # Print function name
                     output_file.write(f"  {function['full_function']}\n")  # Function name
                     output_file.write(f"  Description: {function['description']}\n")  # Print function description
 
@@ -441,6 +448,258 @@ def print_functions_moduels(all_groups, layer):
             output_file.write("\n")  # Add a space between subgroups
 
     print(f"Output saved to {layers_filename}")
+
+def print_functions_groups(all_groups, layer):
+    # Define the filename for output based on the layer variable
+    layers_filename = f"{layer}_functions_with_layers.txt"
+
+    # Open the file for writing
+    with open(layers_filename, "w") as output_file:
+
+        output_file.write("Functions with layers:\n\n")
+        for group, details in all_groups.items():
+            output_file.write(f"=== {details['name']} ({details['header_path']}) ===\n")
+            output_file.write("\n")
+
+            for function in details['functions']:
+
+                output_file.write(f"  function name: {function['func_name']}\n")  # Print function name
+                output_file.write(f"  function: {function['full_function']}\n")  # Print function
+                output_file.write(f"  Parameters: {function['parameters']}\n")  # Print function params
+                output_file.write(f"  Description: {function['description']}\n")  # Print function description
+                for subgroup, paths in function['usage_paths'].items():
+                    if paths:
+                        output_file.write(f"    {subgroup}\n")
+
+    print(f"Output saved to {layers_filename}")
+
+def sanitize_filename(name):
+    """Sanitizes the filename to remove problematic characters."""
+    return re.sub(r"[^\w\d_-]", "_", name)
+
+def generate_uml_sequence_diagrams(all_groups, layer):
+    """
+    Generates a UML sequence diagram in PlantUML format for function calls into the specified layer.
+
+    :param all_groups: A dictionary mapping modules to function calls.
+    :param layer: The API layer for which to generate the diagram.
+    :return: None (saves the diagram as a .puml file).
+    """
+    layer = layer.upper()
+
+    color_mapping = {
+        "SAMPLE": "green",
+        "L2CAP": "purple",
+        "GAP": "darkblue",
+        "GATT": "blue",
+        "ATT": "lightblue",
+        "SMP": "gold",
+        "HCI": "pink",
+        "IPC": "red",
+        "DRIVERS": "lightyellow",
+        "SERVICES": "gray",
+        "OTHER": "fuchsia"
+    }
+
+    # Iterate through all the groups in all_groups
+    for group, details in all_groups.items():
+        # Ensure 'functions' exist in the group
+        if "functions" not in details or not details["functions"]:
+            continue  # Skip empty groups
+
+        # Sanitize group name for filename
+        group_name_sanitized = sanitize_filename(details["name"])
+
+        # Create a separate UML file per group
+        uml_filename = f"{layer}_{group_name_sanitized}_uml.puml"
+
+        with open(uml_filename, "w") as uml_file:
+            uml_file.write("@startuml\n")
+            uml_file.write(f"title Function Call Flow to {layer} {details['name']} API\n\n")
+
+            participants = []
+            for module in grouped_paths:
+                if layer not in module: # want to add the layer in question in the end
+                    participants.append(module)
+            participants.append(layer)  # Add the API layer as a participant
+
+            # Define participants in the UML diagram
+            for participant in participants:
+                color = color_mapping.get(participant)
+                uml_file.write(f"participant \"{participant}\" as {participant} #{color}\n")
+
+            last_function_name = "UnknownFunction"
+            # Iterate through all functions in the group
+            for function in details["functions"]:
+                function_name = function.get("func_name", "UnknownFunction")
+                description = function.get("description", "No description available")
+                parameters = function.get("parameters", {})
+
+
+                # Check if function is used in any `usage_path`
+                if function.get("usage_paths"):
+                    for usage_path, paths in function["usage_paths"].items():
+                        if paths:
+
+                            if last_function_name is not function_name:
+                                # Add a note over all
+                                uml_file.write(f"note across: {description} \\nParameters: {parameters}\n")
+
+                            # Write function call from usage_path to the layer
+                            color = color_mapping.get(usage_path)
+                            uml_file.write(f"{usage_path} -> {layer}: {function_name} #{color}\n")
+                            last_function_name = function_name
+
+            uml_file.write("@enduml\n")
+
+        print(f"UML sequence diagram saved as {uml_filename}")
+
+def generate_deployment_diagrams(all_groups, layer):
+    """
+    Generates a structured UML deployment diagram in PlantUML format.
+
+    :param all_groups: A dictionary mapping modules to function calls.
+    :param layer: The API layer for which to generate the diagram.
+    :return: None (saves the diagram as a .puml file).
+    """
+    layer = layer.upper()
+
+    # Define colors for different modules
+    color_mapping = {
+        "SAMPLE": "green",
+        "L2CAP": "purple",
+        "GAP": "darkblue",
+        "GATT": "blue",
+        "ATT": "lightblue",
+        "SMP": "gold",
+        "HCI": "pink",
+        "IPC": "red",
+        "DRIVERS": "lightyellow",
+        "SERVICES": "gray",
+        "OTHER": "fuchsia"
+    }
+
+    # Define logical groups of clusters
+    group_clusters = {
+        "Application": ["SAMPLE"],
+        "Networking": ["L2CAP", "GAP"],
+        "Bluetooth Core": ["GATT", "ATT", "SMP", "HCI"],
+        "System Services": ["IPC", "DRIVERS", "SERVICES"],
+        "Other": ["OTHER"]
+    }
+
+    for group, details in all_groups.items():
+        if "functions" not in details or not details["functions"]:
+            continue  # Skip groups without function calls
+
+        group_name_sanitized = sanitize_filename(details["name"])
+        uml_filename = f"{layer}_{group_name_sanitized}_vertical_deployment.puml"
+
+        with open(uml_filename, "w") as uml_file:
+            uml_file.write("@startuml\n")
+            uml_file.write(f"title Vertical Deployment Diagram: {layer} {details['name']} API\n\n")
+
+            # Force a vertical top-down structure
+            uml_file.write("skinparam ranksep 50\n")
+            uml_file.write("skinparam nodesep 40\n")
+            uml_file.write("left to right direction\n\n")
+
+            # Generate clusters dynamically
+            previous_module = None
+            for cluster, modules in group_clusters.items():
+                uml_file.write(f"package \"{cluster}\" {{\n")
+                for module in modules:
+                    color = color_mapping.get(module, "white")
+                    uml_file.write(f"  node \"{module}\" as {module} #{color}\n")
+
+                    # Ensure vertical stacking with hidden links
+                    if previous_module:
+                        uml_file.write(f"{previous_module} -[hidden]-> {module}\n")
+                    previous_module = module
+
+                uml_file.write("}\n\n")
+
+            # Store function dependencies per module
+            function_dependencies = {}
+
+            for function in details["functions"]:
+                function_name = function.get("func_name", "UnknownFunction")
+                if function.get("usage_paths"):
+                    for usage_path, paths in function["usage_paths"].items():
+                        if paths:
+                            if usage_path not in function_dependencies:
+                                function_dependencies[usage_path] = []
+                            function_dependencies[usage_path].append(function_name)
+
+            # Group function calls by module
+            for source_module, function_list in function_dependencies.items():
+                unique_functions = set(function_list)
+                functions_str = "\\n".join(unique_functions)
+
+                # Attach notes close to the relevant module instead of all at the API
+                uml_file.write(f"note right of {source_module}: Calls to {layer}:\\n{functions_str}\n")
+
+                for function_name in unique_functions:
+                    uml_file.write(f"{source_module} --> {layer}: {function_name}\n")
+
+            uml_file.write("@enduml\n")
+
+        print(f"Vertical deployment diagram saved as {uml_filename}")
+
+# # import networkx as nx
+# # import matplotlib.pyplot as plt
+
+# # # might need to install 'pip install networkx matplotlib'
+# # def generate_layered_callout_diagram(all_groups, layer):
+# #     """
+# #     Generates a Layered Callout Diagram showing which modules call which functions in the given layer.
+# #     :param all_groups: A dictionary mapping modules to function calls.
+# #     :param layer: The name of the API layer for which to generate the diagram.
+# #     :return: None (saves the diagram as an image).
+# #     """
+# #     # Create a directed graph using networkx
+# #     G = nx.DiGraph()
+
+# #     # Add a node for the layer (example, GATT layer)
+# #     G.add_node(layer, label=layer, shape='rect', style='filled', color='lightblue')
+
+# #     # Iterate through all groups (modules) in the data
+# #     for group, details in all_groups.items():
+# #         # Ensure the group has functions and usage_paths
+# #         if 'functions' not in details or not details['functions']:
+# #             continue
+
+# #         # Add the module (group) node
+# #         G.add_node(group, label=group, shape='ellipse', style='filled', color='lightgreen')
+
+# #         # Iterate through the functions in the current group
+# #         for function in details['functions']:
+# #             function_name = function.get('func_name', 'UnknownFunction')
+# #             parameters = function.get('parameters', {})
+# #             param_str = ", ".join([f"{k}: {v}" for k, v in parameters.items()])
+
+# #             # Check if there are usage paths (i.e., the function is called by some module)
+# #             if function.get('usage_paths'):
+# #                 for usage_path, paths in function['usage_paths'].items():
+# #                     if paths:  # Only add if there are paths (i.e., it's being called by the module)
+# #                         # Create an edge from the usage_path to the function node
+# #                         label = f"{function_name} ({param_str})"
+# #                         G.add_edge(usage_path, function_name, label=label)
+
+# #     # Draw the graph using matplotlib
+# #     plt.figure(figsize=(10, 8))
+# #     pos = nx.spring_layout(G, seed=42)  # Positioning layout for better clarity
+# #     labels = nx.get_edge_attributes(G, 'label')
+# #     nx.draw(G, pos, with_labels=True, node_size=3000, node_color='lightgreen', font_size=10, font_weight='bold', arrows=True)
+# #     nx.draw_networkx_edge_labels(G, pos, edge_labels=labels, font_size=8)
+
+# #     # Save the diagram as an image (e.g., PNG or SVG)
+# #     plt.title(f"Function Call Flow to {layer} API")
+# #     plt.savefig(f"{layer}_callout_diagram.png")  # Saves the diagram as PNG
+# #     plt.show()  # Display the plot
+
+# #     print(f"Layered Callout Diagram saved as '{layer}_callout_diagram.png'.")
+
 
 def main():
     # Input the layer you're looking for
@@ -484,6 +743,16 @@ def main():
 
     print_functions_moduels(all_groups, layer)
 
+    print_functions_groups(all_groups, layer)
+
+    # make UMLs
+    generate_uml_sequence_diagrams(all_groups, layer)
+
+    # make deployment diagram
+    generate_deployment_diagrams(all_groups, layer)
+
+
+    # generate_layered_callout_diagram(all_groups, layer)
 
 # Run the script if executed directly
 if __name__ == "__main__":
