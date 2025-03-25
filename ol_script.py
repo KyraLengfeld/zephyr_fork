@@ -8,20 +8,6 @@ SINGLE_LINE_COMMENT_PATTERN = re.compile(r'^\s*//')
 BLOCK_COMMENT_START_PATTERN = re.compile(r'/\*')
 BLOCK_COMMENT_END_PATTERN = re.compile(r'\*/')
 
-grouped_paths = {
-        "SAMPLE": [],
-        "L2CAP": [],
-        "GAP": [],
-        "GATT": [],
-        "ATT": [],
-        "SMP": [],
-        "HCI": [],
-        "IPC": [],
-        "DRIVERS": [],
-        "SERVICES": [],
-        "OTHER": []  # Default group for uncategorized paths
-    }
-
 # Function to find header files containing the specified word in their names
 def find_headers(word, directory='zephyr'):
     # Create a regex pattern to match the word in the filename (case-insensitive)
@@ -133,6 +119,18 @@ def categorize_paths(paths_and_lines):
     :param paths_and_lines: List of dictionaries containing 'file_path' and 'line_number'.
     :return: A dictionary grouping the paths and their line numbers.
     """
+    grouped_paths = {
+        "SAMPLE": [],
+        "L2CAP": [],
+        "GATT": [],
+        "ATT": [],
+        "SMP": [],
+        "HCI": [],
+        "IPC": [],
+        "DRIVERS": [],
+        "SERVICES": [],
+        "OTHER": []
+    }
 
     for entry in paths_and_lines:
         path = entry['file_path']
@@ -160,7 +158,8 @@ def categorize_paths(paths_and_lines):
         else:
             grouped_paths["OTHER"].append(categorized_entry)
 
-    return grouped_paths
+    # Now, return a deep copy of the lists inside the dictionary to avoid sharing references.
+    return {key: list(value) for key, value in grouped_paths.items()}
 
 def get_brief_comment(lines, current_line, function_name):
     """
@@ -395,7 +394,6 @@ def print_functions_moduels(all_groups, layer):
 
     # Open the file for writing
     with open(layers_filename, "w") as output_file:
-
         output_file.write("Functions sorted by all_layers:\n\n")
 
         # Collect all possible layers dynamically by scanning non-empty usage_paths of functions
@@ -409,43 +407,28 @@ def print_functions_moduels(all_groups, layer):
         for subgroup in sorted(all_layers):
             output_file.write(f"=== {subgroup} ===\n\n")
 
-            # Track if any function is found in this subgroup for any group
+            # Track if any function is found in this subgroup
             found_any_function_in_subgroup = False
 
-            # Iterate over each group
-            for group_name, group_details in all_groups.items():
-                relevant_functions = []  # Track relevant functions for the subgroup in this group
-
-                # Find all functions in the group that are associated with this subgroup
-                for function in group_details['functions']:
-                    # Check if the subgroup exists and if it has any valid paths
+            for group in all_groups.values():
+                for function in group['functions']:
+                    # Check if this function has usage paths in the current subgroup
                     if subgroup in function['usage_paths'] and function['usage_paths'][subgroup]:
-                        relevant_functions.append(function)
+                        found_any_function_in_subgroup = True
+                        output_file.write(f"  Function name: {function['func_name']}\n")
+                        output_file.write(f"  {function['full_function']}\n")
+                        output_file.write(f"  Parameters: {function['parameters']}\n")
+                        output_file.write(f"  Description: {function['description']}\n")
 
-                if not relevant_functions:
-                    continue  # Skip the rest and move to the next group
+                        # Print all paths associated with this function in the subgroup
+                        for path in function['usage_paths'][subgroup]:
+                            output_file.write(f"      {path}\n")
 
-                # If there are relevant functions, print the group name and path
-                found_any_function_in_subgroup = True
-                output_file.write(f"Group: {group_details['name']} ({group_details['header_path']})\n\n")
-
-                # For each relevant function in the group
-                for function in relevant_functions:
-                    output_file.write(f"  function name: {function['func_name']}\n")  # Print function name
-                    output_file.write(f"  {function['full_function']}\n")  # Function name
-                    output_file.write(f"  Description: {function['description']}\n")  # Print function description
-
-                    # Print all paths associated with this function and subgroup
-                    for path in function['usage_paths'][subgroup]:
-                        output_file.write(f"      {path}\n")  # Indented paths
-
-                    output_file.write("\n")  # Add an empty line after each function's paths
+                        output_file.write("\n")
 
             # If no functions were found for any group in this subgroup, write a message
             if not found_any_function_in_subgroup:
-                output_file.write(f"  (No functions found for {subgroup})\n\n")
-
-            output_file.write("\n")  # Add a space between subgroups
+                output_file.write("  No functions found in this subgroup.\n\n")
 
     print(f"Output saved to {layers_filename}")
 
@@ -518,9 +501,9 @@ def generate_uml_sequence_diagrams(all_groups, layer):
             uml_file.write(f"title Function Call Flow to {layer} {details['name']} API\n\n")
 
             participants = []
-            for module in grouped_paths:
-                if layer not in module: # want to add the layer in question in the end
-                    participants.append(module)
+            for key in color_mapping:
+                if layer not in key: # want to add the layer in question in the end
+                    participants.append(key)
             participants.append(layer)  # Add the API layer as a participant
 
             # Define participants in the UML diagram
