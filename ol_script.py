@@ -526,11 +526,13 @@ def generate_uml_sequence_diagrams(all_groups, layer):
 
                             if last_function_name is not function_name:
                                 # Add a note over all
-                                uml_file.write(f"note across: {description} \\nParameters: {parameters}\n")
+                                uml_file.write(f"note over {usage_path}: {description} \\nParameters: {parameters}\n")
 
                             # Write function call from usage_path to the layer
-                            color = color_mapping.get(usage_path)
-                            uml_file.write(f"{usage_path} -> {layer}: {function_name} #{color}\n")
+                            # unfortunately, this doesn't work
+                            # color = color_mapping.get(usage_path)
+                            # uml_file.write(f"{usage_path} -> {layer}: {function_name} #{color}\n")
+                            uml_file.write(f"{usage_path} -> {layer}: {function_name}\n")
                             last_function_name = function_name
 
             uml_file.write("@enduml\n")
@@ -539,11 +541,144 @@ def generate_uml_sequence_diagrams(all_groups, layer):
 
 def generate_deployment_diagrams(all_groups, layer):
     """
-    Generates a structured UML deployment diagram in PlantUML format.
+    Generates a structured UML deployment diagram (deployment-style) in PlantUML format,
+    with one output file per group. The layout is forced into a grid as follows:
+
+    - Top Left: standalone node "OTHER"
+    - Top Right: "APP" box containing nodes "SAMPLE" and "SERVICES" (side by side)
+    - Below OTHER (left column): node "SMP"
+    - Then, in the left column (middle): an "Attributes" box containing nodes "GATT" and "ATT"
+         (if the analyzed layer is GATT or ATT, remove it so that only the other remains;
+          if only one remains, do not use a box)
+    - Middle Right: a standalone (and “larger”) node for the analyzed layer
+    - Bottom Left: standalone node "L2CAP"
+    - Bottom Right: a "System" box containing nodes "IPC", "DRIVERS", and "HCI" (arranged horizontally)
+
+    Hidden links are added to force grid-like alignment.
+
+    :param all_groups: dict mapping group names to group details (each with a "name" and "functions")
+    :param layer: the API layer (e.g. "GATT", "L2CAP", etc.)
+    :return: None (saves one .puml file per group)
+    """
+    layer = layer.upper()
+
+    # Color mapping for modules
+    color_mapping = {
+        "SAMPLE": "green",
+        "L2CAP": "purple",
+        "GAP": "darkblue",
+        "GATT": "blue",
+        "ATT": "lightblue",
+        "SMP": "gold",
+        "HCI": "pink",
+        "IPC": "red",
+        "DRIVERS": "lightyellow",
+        "SERVICES": "gray",
+        "OTHER": "fuchsia"
+    }
+
+    # Define static layout clusters (using our desired grid positions)
+    # Note: We leave out "Attributes" if the analyzed layer is one of those.
+    attributes_modules = ["GATT", "ATT"]
+    if layer in attributes_modules:
+        attributes_modules.remove(layer)  # e.g., if layer == "GATT", then only "ATT" remains.
+
+    for group, details in all_groups.items():
+        # Skip groups with no functions
+        if "functions" not in details or not details["functions"]:
+            continue
+
+        group_name_sanitized = sanitize_filename(details["name"])
+        uml_filename = f"{layer}_{group_name_sanitized}_vertical_deployment.puml"
+
+        with open(uml_filename, "w") as uml_file:
+            uml_file.write("@startuml\n")
+            uml_file.write(f"title Vertical Deployment Diagram: {layer} {details['name']} API\n\n")
+
+            # Global layout parameters
+            uml_file.write("skinparam ranksep 50\n")
+            uml_file.write("skinparam nodesep 40\n")
+            uml_file.write("left to right direction\n\n")
+
+            # --- Left Column ---
+            # Top left: OTHER node
+            uml_file.write(f'node "OTHER" as OTHER #{color_mapping["OTHER"]}\n\n')
+
+            # Below OTHER: SMP node
+            uml_file.write(f'node "SMP" as SMP #{color_mapping["SMP"]}\n\n')
+
+            # Middle left: Attributes box (if both remain, use a package; if only one remains, output as standalone)
+            if len(attributes_modules) == 2:
+                uml_file.write("package \"Attributes\" {\n")
+                for module in attributes_modules:
+                    uml_file.write(f'  node "{module}" as {module} #{color_mapping[module]}\n')
+                uml_file.write("}\n\n")
+            elif len(attributes_modules) == 1:
+                module = attributes_modules[0]
+                uml_file.write(f'node "{module}" as {module} #{color_mapping[module]}\n\n')
+
+            # Bottom left: L2CAP node
+            uml_file.write(f'node "L2CAP" as L2CAP #{color_mapping["L2CAP"]}\n\n')
+
+            # --- Right Column ---
+            # Top right: APP box with SAMPLE and SERVICES (side by side)
+            uml_file.write("package \"APP\" {\n")
+            uml_file.write(f'  node "SAMPLE" as SAMPLE #{color_mapping["SAMPLE"]}\n')
+            uml_file.write(f'  node "SERVICES" as SERVICES #{color_mapping["SERVICES"]}\n')
+            uml_file.write("}\n\n")
+
+            # Middle right: The analyzed layer node (make it “bigger” by using a stereotype)
+            uml_file.write(f'node "{layer}" as LAYER #{color_mapping.get(layer, "white")}\n')
+
+            # Bottom right: System box with IPC, DRIVERS, and HCI arranged horizontally.
+            uml_file.write("package \"System\" {\n")
+            uml_file.write(f'  node "IPC" as IPC #{color_mapping["IPC"]}\n')
+            uml_file.write(f'  node "DRIVERS" as DRIVERS #{color_mapping["DRIVERS"]}\n')
+            uml_file.write(f'  node "HCI" as HCI #{color_mapping["HCI"]}\n')
+            uml_file.write("}\n\n")
+
+            # --- Hidden links to force grid alignment ---
+            # Left column hidden links (top to bottom): OTHER -> SMP -> (Attributes or its first node) -> L2CAP
+            uml_file.write("OTHER -[hidden]-> SMP\n")
+            if len(attributes_modules) >= 1:
+                # if Attributes is a package, link from SMP to the first node inside (we choose the first in the list)
+                first_attr = attributes_modules[0] if isinstance(attributes_modules, list) else attributes_modules
+                uml_file.write(f"SMP -[hidden]-> {first_attr}\n")
+            uml_file.write("SMP -[hidden]-> L2CAP\n")
+
+            # Right column hidden links: APP -> LAYER -> (first node of System)
+            uml_file.write("SAMPLE -[hidden]-> LAYER\n")
+            uml_file.write("LAYER -[hidden]-> IPC\n\n")
+
+            # --- Function Call Dependencies ---
+            # Build a dictionary of function dependencies based on usage_paths.
+            function_dependencies = {}
+            for function in details["functions"]:
+                function_name = function.get("func_name", "UnknownFunction")
+                if function.get("usage_paths"):
+                    for usage_path, paths in function["usage_paths"].items():
+                        if paths:  # Only consider if there are nonempty paths
+                            function_dependencies.setdefault(usage_path, []).append(function_name)
+
+            # For each source module, add a note (grouping calls) and arrows to the layer node.
+            for source_module, function_list in function_dependencies.items():
+                unique_functions = set(function_list)
+                # functions_str = "\\n".join(unique_functions)
+                # uml_file.write(f'note right of {source_module}: Calls to {layer}:\\n{functions_str}\n')
+                for fname in unique_functions:
+                    uml_file.write(f"{source_module} --> LAYER: {fname}\n")
+
+            uml_file.write("@enduml\n")
+
+        print(f"Vertical deployment diagram saved as {uml_filename}")
+
+def generate_deployment_diagram(all_groups, layer):
+    """
+    Generates a structured UML deployment diagram in PlantUML format for all groups in one diagram.
 
     :param all_groups: A dictionary mapping modules to function calls.
     :param layer: The API layer for which to generate the diagram.
-    :return: None (saves the diagram as a .puml file).
+    :return: None (saves the diagram as a single .puml file).
     """
     layer = layer.upper()
 
@@ -571,39 +706,39 @@ def generate_deployment_diagrams(all_groups, layer):
         "Other": ["OTHER"]
     }
 
-    for group, details in all_groups.items():
-        if "functions" not in details or not details["functions"]:
-            continue  # Skip groups without function calls
+    # Start writing the UML diagram
+    uml_filename = f"{layer}_deployment.puml"
+    with open(uml_filename, "w") as uml_file:
+        uml_file.write("@startuml\n")
+        uml_file.write(f"title Deployment Diagram: {layer} API\n\n")
 
-        group_name_sanitized = sanitize_filename(details["name"])
-        uml_filename = f"{layer}_{group_name_sanitized}_vertical_deployment.puml"
+        # Force a vertical top-down structure
+        uml_file.write("skinparam ranksep 50\n")
+        uml_file.write("skinparam nodesep 40\n")
+        uml_file.write("left to right direction\n\n")
 
-        with open(uml_filename, "w") as uml_file:
-            uml_file.write("@startuml\n")
-            uml_file.write(f"title Vertical Deployment Diagram: {layer} {details['name']} API\n\n")
+        # Generate clusters dynamically for all groups
+        previous_module = None
+        for cluster, modules in group_clusters.items():
+            uml_file.write(f"package \"{cluster}\" {{\n")
+            for module in modules:
+                color = color_mapping.get(module, "white")
+                uml_file.write(f"  node \"{module}\" as {module} #{color}\n")
 
-            # Force a vertical top-down structure
-            uml_file.write("skinparam ranksep 50\n")
-            uml_file.write("skinparam nodesep 40\n")
-            uml_file.write("left to right direction\n\n")
+                # Ensure vertical stacking with hidden links
+                if previous_module:
+                    uml_file.write(f"{previous_module} -[hidden]-> {module}\n")
+                previous_module = module
 
-            # Generate clusters dynamically
-            previous_module = None
-            for cluster, modules in group_clusters.items():
-                uml_file.write(f"package \"{cluster}\" {{\n")
-                for module in modules:
-                    color = color_mapping.get(module, "white")
-                    uml_file.write(f"  node \"{module}\" as {module} #{color}\n")
+            uml_file.write("}\n\n")
 
-                    # Ensure vertical stacking with hidden links
-                    if previous_module:
-                        uml_file.write(f"{previous_module} -[hidden]-> {module}\n")
-                    previous_module = module
+        # Store function dependencies per module
+        function_dependencies = {}
 
-                uml_file.write("}\n\n")
-
-            # Store function dependencies per module
-            function_dependencies = {}
+        # Now loop through all groups and process functions
+        for group, details in all_groups.items():
+            if "functions" not in details or not details["functions"]:
+                continue  # Skip groups without function calls
 
             for function in details["functions"]:
                 function_name = function.get("func_name", "UnknownFunction")
@@ -614,20 +749,16 @@ def generate_deployment_diagrams(all_groups, layer):
                                 function_dependencies[usage_path] = []
                             function_dependencies[usage_path].append(function_name)
 
-            # Group function calls by module
-            for source_module, function_list in function_dependencies.items():
-                unique_functions = set(function_list)
-                functions_str = "\\n".join(unique_functions)
+        # Group function calls by module
+        for source_module, function_list in function_dependencies.items():
+            unique_functions = set(function_list)
 
-                # Attach notes close to the relevant module instead of all at the API
-                uml_file.write(f"note right of {source_module}: Calls to {layer}:\\n{functions_str}\n")
+            for function_name in unique_functions:
+                uml_file.write(f"{source_module} --> {layer}: {function_name}\n")
 
-                for function_name in unique_functions:
-                    uml_file.write(f"{source_module} --> {layer}: {function_name}\n")
+        uml_file.write("@enduml\n")
 
-            uml_file.write("@enduml\n")
-
-        print(f"Vertical deployment diagram saved as {uml_filename}")
+    print(f"Deployment diagram saved as {uml_filename}")
 
 # # import networkx as nx
 # # import matplotlib.pyplot as plt
@@ -733,6 +864,7 @@ def main():
 
     # make deployment diagram
     generate_deployment_diagrams(all_groups, layer)
+    generate_deployment_diagram(all_groups, layer)
 
 
     # generate_layered_callout_diagram(all_groups, layer)
