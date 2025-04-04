@@ -19,7 +19,7 @@ def find_headers(word, directory='zephyr'):
     # Walk through the 'zephyr' directory and its subdirectories
     for root, dirs, files in os.walk(directory):
         # Skip unwanted directories early
-        dirs[:] = [d for d in dirs if not any(excluded in d.lower() for excluded in ['test', 'mock', 'mesh', 'audio'])]
+        dirs[:] = [d for d in dirs if not any(excluded in d.lower() for excluded in ['test', 'mock', 'mesh', 'audio', 'classic', 'services', 'mcumgr', 'net', 'll_sw'])]
 
         for file in files:
             # Check if file ends with .h and matches the pattern
@@ -907,50 +907,54 @@ def main():
     if not header_list:
         print("There are no headers fitting to this, mistyped? Try again.")
         return
-    print("Processing workspace")
 
-    # search for function calls in the current directory
-    directory = "."  # current directory
-    lookup_table = find_function_calls(directory, layer, header_list)
-    # Save the newly generated lookup table
-    lookup_table_file = f"lookup_{layer}.txt"
-    with open(lookup_table_file, "w", encoding="utf-8") as file:
-        json.dump(lookup_table, file, indent=4)
+    print(f"\nFollowing headers are scaned for {layer} functions:")
+    for item in header_list:
+        print(item)
+    print("\nProcessing workspace")
 
-    print("Work Space searched through . . .")
+    # # search for function calls in the current directory
+    # directory = "."  # current directory
+    # lookup_table = find_function_calls(directory, layer, header_list)
+    # # Save the newly generated lookup table
+    # lookup_table_file = f"lookup_{layer}.txt"
+    # with open(lookup_table_file, "w", encoding="utf-8") as file:
+    #     json.dump(lookup_table, file, indent=4)
 
-    # extract function in {layer} headers and match them with lookup table info,
-    # remove from lookup table after processed
-    all_groups = {}
-    for header in header_list:
-        if contains_groups(header):
-            groups_info, lookup_table = save_function_names(header, True, lookup_table)
-        else:
-            groups_info, lookup_table = save_function_names(header, False, lookup_table)
-        all_groups.update(groups_info)
-    # Save the newly generated lookup table
-    all_groups_file = f"all_groups_{layer}.txt"
-    with open(all_groups_file, "w", encoding="utf-8") as file:
-        json.dump(all_groups, file, indent=4)
+    # print("Work Space searched through . . .")
 
-    print("Matched functions to workspace database . . .")
+    # # extract function in {layer} headers and match them with lookup table info,
+    # # remove from lookup table after processed
+    # all_groups = {}
+    # for header in header_list:
+    #     if contains_groups(header):
+    #         groups_info, lookup_table = save_function_names(header, True, lookup_table)
+    #     else:
+    #         groups_info, lookup_table = save_function_names(header, False, lookup_table)
+    #     all_groups.update(groups_info)
+    # # Save the newly generated lookup table
+    # all_groups_file = f"all_groups_{layer}.txt"
+    # with open(all_groups_file, "w", encoding="utf-8") as file:
+    #     json.dump(all_groups, file, indent=4)
 
-    # printing
-    print_functions_simple(all_groups, layer)
+    # print("Matched functions to workspace database . . .")
 
-    print_functions_moduels(all_groups, layer)
+    # # printing
+    # print_functions_simple(all_groups, layer)
 
-    print_functions_groups(all_groups, layer)
+    # print_functions_moduels(all_groups, layer)
 
-    # make UMLs
-    generate_uml_sequence_diagrams(all_groups, layer)
+    # print_functions_groups(all_groups, layer)
 
-    # make deployment diagram
-    generate_deployment_diagrams(all_groups, layer)
-    generate_deployment_diagram(all_groups, layer)
+    # # make UMLs
+    # generate_uml_sequence_diagrams(all_groups, layer)
+
+    # # make deployment diagram
+    # generate_deployment_diagrams(all_groups, layer)
+    # generate_deployment_diagram(all_groups, layer)
 
 
-    # generate_layered_callout_diagram(all_groups, layer)
+    # # generate_layered_callout_diagram(all_groups, layer)
 
 # Run the script if executed directly
 if __name__ == "__main__":
