@@ -34,12 +34,14 @@ def find_function_calls(directory, patterns, ignore_paths):
     lookup_table = []
 
     for pattern in patterns:
+
+        print(f"Currently grepping for: {pattern}")
         # Compile a regex to extract function calls for this pattern
         escaped_pattern = re.escape(pattern)
-        function_call_pattern = re.compile(r'\s*([a-zA-Z0-9_]*' + escaped_pattern + r'[a-zA-Z0-9_]*)\s*\(.*\)\s*;')
+        function_call_pattern = re.compile(r'\b([a-zA-Z0-9_]*' + escaped_pattern + r'[a-zA-Z0-9_]*)\s*\(')
 
         # Construct the grep command for the current pattern
-        grep_pattern = rf'\\b[a-zA-Z0-9_]*{pattern}[a-zA-Z0-9_]*\\s*\\('
+        grep_pattern = rf'\b[a-zA-Z0-9_]*{pattern}[a-zA-Z0-9_]*\s*\('
 
         grep_command = (f'grep -rnE "{grep_pattern}" {directory} --include="*.c" --include="*.h"')
 
@@ -60,8 +62,8 @@ def find_function_calls(directory, patterns, ignore_paths):
                     continue
 
                 # Match the function call line and extract function name
-                match_call = function_call_pattern.search(code_line)
-                if match_call:
+                matches = function_call_pattern.finditer(code_line)
+                for match_call in matches:
                     function_name = match_call.group(1)
                     file_path = file_path.replace("./", "")
                     lookup_table.append({
@@ -964,28 +966,97 @@ def add_usage_to_groups(groups, lookup_table):
         functions = group_data.get('functions', [])
 
         for function_dict in functions:
-            # Extract function name for lookup
             func_name = function_dict.get('func_name')
-
-            # Initialize empty list to store usages
             usage_list = []
 
-            # Loop over all entries in lookup_table
-            for usage in lookup_table:
-                # Match both the function name and type == 'call'
+            # We'll track indices to remove after the loop (can't modify list during iteration)
+            indices_to_remove = []
+
+            for idx, usage in enumerate(lookup_table):
                 if usage.get('function_name') == func_name and usage.get('type') == 'call':
                     file_path = usage.get('file_path')
                     line_number = usage.get('line_number')
+                    usage_list.append(f"{file_path}:{line_number}")
+                    indices_to_remove.append(idx)
 
-                    # Format as "path/to/file:{line}"
-                    usage_entry = f"{file_path}:{line_number}"
-                    usage_list.append(usage_entry)
+            # Remove used entries from lookup_table in reverse order (to keep indexing correct)
+            for index in reversed(indices_to_remove):
+                del lookup_table[index]
 
-            # If matches were found, assign list; otherwise, assign "none"
-            if usage_list:
+            if len(usage_list) > 1:
                 function_dict['usage in WS'] = usage_list
             else:
-                function_dict['usage in WS'] = "none"
+                # Determine if group name contains 'internal' (case-insensitive)
+                group_name = group_data.get('name', '').lower()
+                if 'internal' in group_name:
+                    function_dict['usage in WS'] = "None: internal header function, why does this function exist?"
+                else:
+                    function_dict['usage in WS'] = "None: external header function, can be called by customers or from anywhere."
+
+def write_group_summary_to_file(groups, output_path):
+    """
+    Writes a structured summary of all groups and their functions to a text file.
+
+    Format:
+    === <group name> (<header path>) ===
+
+    <function name>
+        <full function name>
+        <function description>
+        parameters:
+            <param 1>
+            <param 2>
+        usage in WS:
+            <path/to/file:line>
+            ...
+
+    Parameters:
+    - groups (dict): The group dictionary.
+    - output_path (str): Path to the output .txt file.
+
+    Returns:
+    - None. Writes to file.
+    """
+
+    with open(output_path, 'w', encoding='utf-8') as file:
+        for group_key, group_data in groups.items():
+            group_name = group_data.get('name', '<unknown>')
+            header_path = group_data.get('header_path', '<no header path>')
+
+            file.write(f"=== {group_name} ({header_path}) ===\n\n")
+
+            for function in group_data.get('functions', []):
+                func_name = function.get('func_name', '<no name>')
+                full_function = function.get('full_function', '<no full function>')
+                description = function.get('description', '<no description>')
+                parameters = function.get('parameters', {})
+                usage = function.get('usage in WS', 'None')
+
+                file.write(f"{func_name}\n")
+                file.write(f"    {full_function}\n")
+                file.write(f"    {description}\n")
+                file.write(f"    parameters:\n")
+
+                if parameters:
+                    for param_name, param_details in parameters.items():
+                        # If the parameter has 'param' and 'description' keys, print them
+                        if isinstance(param_details, dict):
+                            param_str = f"{param_details.get('param', '<no param>')}, ( {param_details.get('description', '<no description>')} )"
+                            file.write(f"        {param_str}\n")
+                        else:
+                            # If parameter is not a dictionary, print it directly
+                            file.write(f"        {param_details}\n")
+                else:
+                    file.write("        <no parameters>\n")
+
+                file.write("    usage in WS:\n")
+                if isinstance(usage, list):
+                    for entry in usage:
+                        file.write(f"        {entry}\n")
+                else:
+                    file.write(f"        {usage}\n")
+
+                file.write("\n")  # Extra space between functions
 
 
 def main():
@@ -1035,6 +1106,8 @@ def main():
     all_groups_file = f"all_groups_new_{layer}.txt"
     with open(all_groups_file, "w", encoding="utf-8") as file:
         json.dump(all_groups, file, indent=4)
+
+    write_group_summary_to_file(all_groups, "function_summary.txt")
 
     # print("Work Space searched through . . .")
 
