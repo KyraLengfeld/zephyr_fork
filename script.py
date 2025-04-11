@@ -343,17 +343,23 @@ def extract_function_name(function_line):
     function_name = function_line.strip().split('(')[0].strip()
     return function_name
 
-# go through group by group and save functions in group
-def save_function_names(header_path, are_groups, lookup_table):
+def add_external_internal(header_path, file_name):
+    if file_name:
+        file_name += ", "
+    if "internal" in header_path:
+        file_name += "internal"
+    else:
+        file_name += "external"
+    return file_name
+
+def save_function_names(header_path, are_groups):
     """
     Extracts functions from a header file, categorizes them into groups,
     and tracks where they are used.
 
     :param header_path: The file path of the header file being analyzed.
     :param are_groups: Boolean indicating whether the header file contains @defgroup sections.
-    :param lookup_table: List of function calls found in source files.
-    :return: A dictionary mapping groups to functions and their usage paths,
-             and an updated lookup_table with found function calls removed.
+    :return: A dictionary mapping groups to functions and their usage paths.
     """
     groups = {}
     idx_groups = 0
@@ -366,9 +372,11 @@ def save_function_names(header_path, are_groups, lookup_table):
         if not are_groups:
             # If there are no groups, create a single group named after the file
             file_name = os.path.basename(header_path)
+            stripped_fn = file_name.removesuffix(".h")
+            filename = add_external_internal(header_path, stripped_fn)
             group_key = 'group_0'
             groups[group_key] = {
-                'name': file_name,
+                'name': filename,
                 'header_path': header_path,
                 'functions': []
             }
@@ -382,17 +390,17 @@ def save_function_names(header_path, are_groups, lookup_table):
             if are_groups and '@defgroup' in line:
                 # Extract the group name by removing the '@defgroup' part
                 group_name = line.replace('* @defgroup', '').strip()
-                print(f"{group_name}")
-                if group_name:
-                    # Increment group index and create a new group key
-                    idx_groups += 1
-                    group_key = f'group_{idx_groups}'
-                    # Initialize the group in the dictionary
-                    groups[group_key] = {
-                        'name': group_name,
-                        'header_path': header_path,
-                        'functions': []
-                    }
+                filename = add_external_internal(header_path, group_name)
+
+                # Increment group index and create a new group key
+                idx_groups += 1
+                group_key = f'group_{idx_groups}'
+                # Initialize the group in the dictionary
+                groups[group_key] = {
+                    'name': filename,
+                    'header_path': header_path,
+                    'functions': []
+                }
             elif group_key and re.search(r"\(", line): # possible function start
                 if re.search(r'\b(memset|typedef|define|return|{|=|:|\)\()\b', line):
                     continue # exclude all you know is not a function
@@ -427,12 +435,6 @@ def save_function_names(header_path, are_groups, lookup_table):
                     # Extract function parameters and their descriptions
                     params = get_params(lines, i)
 
-                    # Find where this function is used
-                    func_paths_and_lines = find_usage_of_funcs(function_name, lookup_table)
-
-                    # Categorize paths with line numbers
-                    # so: {LAYER_1: [path_1:line_1, path_2:line_2], LAYER_2: [...], ...}
-                    categorized_paths = categorize_paths(func_paths_and_lines[function_name])
 
                     # Add function with usage paths to the dictionary
                     groups[group_key]['functions'].append({
@@ -440,10 +442,9 @@ def save_function_names(header_path, are_groups, lookup_table):
                         'func_name': function_name,
                         'description': func_description,
                         'parameters': params,
-                        'usage_paths': categorized_paths
                     })
 
-    return groups, lookup_table
+    return groups
 
 def print_functions_simple(all_groups, layer):
     general_filename = f"{layer}_functions.txt"
@@ -912,6 +913,19 @@ def main():
     for item in header_list:
         print(item)
     print("\nProcessing workspace")
+
+    all_groups = {}
+    for header in header_list:
+        if contains_groups(header):
+            groups_info = save_function_names(header, True)
+        else:
+            groups_info = save_function_names(header, False)
+        all_groups.update(groups_info)
+
+    # Save the newly generated lookup table
+    all_groups_file = f"all_groups_{layer}.txt"
+    with open(all_groups_file, "w", encoding="utf-8") as file:
+        json.dump(all_groups, file, indent=4)
 
     # # search for function calls in the current directory
     # directory = "."  # current directory
