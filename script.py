@@ -39,7 +39,8 @@ def find_function_calls(directory, patterns, ignore_paths):
         function_call_pattern = re.compile(r'\s*([a-zA-Z0-9_]*' + escaped_pattern + r'[a-zA-Z0-9_]*)\s*\(.*\)\s*;')
 
         # Construct the grep command for the current pattern
-        grep_pattern = rf'\\b[a-zA-Z0-9_]*{pattern}[a-zA-Z0-9_]*\\s*\\(.*\\)\\s*;'
+        grep_pattern = rf'\\b[a-zA-Z0-9_]*{pattern}[a-zA-Z0-9_]*\\s*\\('
+
         grep_command = (f'grep -rnE "{grep_pattern}" {directory} --include="*.c" --include="*.h"')
 
         try:
@@ -417,7 +418,7 @@ def save_function_names(header_path, are_groups):
 
                     # multiline definition
                     if ");" not in line:
-                        full_function = extract_multiline_function_name(full_function, lines, i)
+                        full_function = extract_multiline_function_name(full_function, lines, i+1)
 
                     # Match everything from the start up to the first '*' (only if '*' appears before '(')
                     match = re.match(r'^[^(\n]*\*\s*(.*)', line)
@@ -923,6 +924,69 @@ def generate_deployment_diagram(all_groups, layer):
 
 # #     print(f"Layered Callout Diagram saved as '{layer}_callout_diagram.png'.")
 
+def add_usage_to_groups(groups, lookup_table):
+    """
+    Enhances each function in the 'groups' dictionary by adding a 'usage in WS' key.
+    This key contains a list of all locations where the function is called, based on the lookup_table.
+    If there are no usages found, the value will be the string "none".
+
+    Parameters:
+    - groups (dict): Dictionary structured as:
+        groups[group_key] = {
+            'name': filename,
+            'header_path': header_path,
+            'functions': [
+                {
+                    'full_function': ...,
+                    'func_name': ...,
+                    'description': ...,
+                    'parameters': ...,
+                },
+                ...
+            ]
+        }
+
+    - lookup_table (list): List of dictionaries, each like:
+        {
+            'function_name': ...,
+            'file_path': ...,
+            'line_number': ...,
+            'type': 'call'
+        }
+
+    Returns:
+    - None. The function modifies the 'groups' dictionary in-place.
+    """
+
+    # Iterate over all groups
+    for group_key, group_data in groups.items():
+        # Make sure 'functions' is present and is a list
+        functions = group_data.get('functions', [])
+
+        for function_dict in functions:
+            # Extract function name for lookup
+            func_name = function_dict.get('func_name')
+
+            # Initialize empty list to store usages
+            usage_list = []
+
+            # Loop over all entries in lookup_table
+            for usage in lookup_table:
+                # Match both the function name and type == 'call'
+                if usage.get('function_name') == func_name and usage.get('type') == 'call':
+                    file_path = usage.get('file_path')
+                    line_number = usage.get('line_number')
+
+                    # Format as "path/to/file:{line}"
+                    usage_entry = f"{file_path}:{line_number}"
+                    usage_list.append(usage_entry)
+
+            # If matches were found, assign list; otherwise, assign "none"
+            if usage_list:
+                function_dict['usage in WS'] = usage_list
+            else:
+                function_dict['usage in WS'] = "none"
+
 
 def main():
     # Input the layer you're looking for
@@ -965,6 +1029,12 @@ def main():
     lookup_table_file = f"lookup_{layer}.txt"
     with open(lookup_table_file, "w", encoding="utf-8") as file:
         json.dump(lookup_table, file, indent=4)
+
+    add_usage_to_groups(all_groups, lookup_table)
+    # Save the newly generated lookup table
+    all_groups_file = f"all_groups_new_{layer}.txt"
+    with open(all_groups_file, "w", encoding="utf-8") as file:
+        json.dump(all_groups, file, indent=4)
 
     # print("Work Space searched through . . .")
 
