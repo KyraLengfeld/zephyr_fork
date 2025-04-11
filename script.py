@@ -30,47 +30,50 @@ def find_headers(word, directory='zephyr'):
     return header_list
 
 
-# Function to find gatt function calls in .c and .h files
-def find_function_calls(directory, layer, ignore_paths):
+def find_function_calls(directory, patterns, ignore_paths):
     lookup_table = []
 
-    function_call_pattern = re.compile(r'\s*([a-z0-9_]*' + re.escape(layer) + r'[a-z0-9_]*)\s*\(.*\)\s*;')
+    for pattern in patterns:
+        # Compile a regex to extract function calls for this pattern
+        escaped_pattern = re.escape(pattern)
+        function_call_pattern = re.compile(r'\s*([a-zA-Z0-9_]*' + escaped_pattern + r'[a-zA-Z0-9_]*)\s*\(.*\)\s*;')
 
-    # Use grep to search for function calls efficiently
-    try:
-        grep_command = f'grep -rnE "\\b[a-zA-Z0-9_]*{layer}[a-zA-Z0-9_]*\\s*\\(.*\\)\\s*;" {directory} --include="*.c" --include="*.h"'
-        grep_output = subprocess.run(grep_command, shell=True, capture_output=True, text=True)
+        # Construct the grep command for the current pattern
+        grep_pattern = rf'\\b[a-zA-Z0-9_]*{pattern}[a-zA-Z0-9_]*\\s*\\(.*\\)\\s*;'
+        grep_command = (f'grep -rnE "{grep_pattern}" {directory} --include="*.c" --include="*.h"')
 
-        for line in grep_output.stdout.splitlines():
-            parts = line.split(":", 2)
-            if len(parts) < 3:
-                continue
-            file_path, line_number, code_line = parts
-            line_number = int(line_number.strip())
+        try:
+            grep_output = subprocess.run(grep_command, shell=True, capture_output=True, text=True)
 
-            if any(ignore_path in file_path for ignore_path in ignore_paths):
-                continue
+            for line in grep_output.stdout.splitlines():
+                parts = line.split(":", 2)
+                if len(parts) < 3:
+                    continue
+                file_path, line_number, code_line = parts
+                line_number = int(line_number.strip())
 
-            if "test" in file_path or "mock" in file_path or f"{layer}" in file_path:
-                continue
+                # Skip unwanted paths
+                if any(ignore_path in file_path for ignore_path in ignore_paths):
+                    continue
+                if "test" in file_path or "mock" in file_path or pattern in file_path:
+                    continue
 
-            match_call = function_call_pattern.search(code_line)
-            if match_call:
-                function_name = match_call.group(1)
-                # Add the function call details to the lookup table
-                file_path = file_path.replace("./", "")
-                lookup_table.append({
-                    'function_name': function_name,
-                    'file_path': file_path,
-                    'line_number': line_number,
-                    'type': 'call'
-                })
+                # Match the function call line and extract function name
+                match_call = function_call_pattern.search(code_line)
+                if match_call:
+                    function_name = match_call.group(1)
+                    file_path = file_path.replace("./", "")
+                    lookup_table.append({
+                        'function_name': function_name,
+                        'file_path': file_path,
+                        'line_number': line_number,
+                        'type': 'call'
+                    })
 
-    except Exception as e:
-        print(f"Error running grep command: {e}")
+        except Exception as e:
+            print(f"Error running grep for pattern '{pattern}': {e}")
 
     print("Lookup table generated and saved to file.")
-
     return lookup_table
 
 def contains_groups(filename):
@@ -950,16 +953,18 @@ def main():
         json.dump(all_groups, file, indent=4)
 
     pattern = extract_function_patterns(all_groups)
-    for item in pattern:
-        print(item)
+    print("Grepping in the workspace for following patterns:")
+    print(pattern)
+    print()
+    print("Grepping, this might take a longer moment.")
 
-    # # search for function calls in the current directory
-    # directory = "."  # current directory
-    # lookup_table = find_function_calls(directory, layer, header_list)
-    # # Save the newly generated lookup table
-    # lookup_table_file = f"lookup_{layer}.txt"
-    # with open(lookup_table_file, "w", encoding="utf-8") as file:
-    #     json.dump(lookup_table, file, indent=4)
+    # search for function calls in the current directory
+    directory = "."  # current directory
+    lookup_table = find_function_calls(directory, pattern, header_list)
+    # Save the newly generated lookup table
+    lookup_table_file = f"lookup_{layer}.txt"
+    with open(lookup_table_file, "w", encoding="utf-8") as file:
+        json.dump(lookup_table, file, indent=4)
 
     # print("Work Space searched through . . .")
 
