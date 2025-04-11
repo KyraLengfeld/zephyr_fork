@@ -429,6 +429,9 @@ def save_function_names(header_path, are_groups):
                         # seems this was not a function
                         continue
 
+                    if function_name == "if" or function_name == "switch":
+                        continue
+
                     # Extract function description from preceding comments
                     func_description = get_brief_comment(lines, i, function_name)
 
@@ -445,6 +448,25 @@ def save_function_names(header_path, are_groups):
                     })
 
     return groups
+
+def extract_function_patterns(groups):
+    patterns = []
+
+    for group in groups.values():
+        for func in group.get('functions', []):
+            name = func.get('func_name', '')
+            if name.startswith('bt_'):
+                parts = name.split('_')
+                if len(parts) >= 2:
+                    pattern = f'bt_{parts[1]}'
+                    if pattern not in patterns:
+                        patterns.append(pattern)
+            else:
+                if name not in patterns:
+                    patterns.append(name)
+
+    return patterns
+
 
 def print_functions_simple(all_groups, layer):
     general_filename = f"{layer}_functions.txt"
@@ -926,6 +948,10 @@ def main():
     all_groups_file = f"all_groups_{layer}.txt"
     with open(all_groups_file, "w", encoding="utf-8") as file:
         json.dump(all_groups, file, indent=4)
+
+    pattern = extract_function_patterns(all_groups)
+    for item in pattern:
+        print(item)
 
     # # search for function calls in the current directory
     # directory = "."  # current directory
