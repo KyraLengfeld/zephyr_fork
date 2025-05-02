@@ -995,72 +995,6 @@ def add_usage_to_groups(groups, lookup_table):
                 else:
                     function_dict['usage in WS'] = "None: external header function, can be called by customers or from anywhere."
 
-def write_group_summary_to_file(groups, output_path):
-    """
-    Writes a structured summary of all groups and their functions to a text file.
-
-    Format:
-    === <group name> (<header path>) ===
-
-    <function name>
-        <full function name>
-        <function description>
-        parameters:
-            <param 1>
-            <param 2>
-        usage in WS:
-            <path/to/file:line>
-            ...
-
-    Parameters:
-    - groups (dict): The group dictionary.
-    - output_path (str): Path to the output .txt file.
-
-    Returns:
-    - None. Writes to file.
-    """
-
-    with open(output_path, 'w', encoding='utf-8') as file:
-        for group_key, group_data in groups.items():
-            group_name = group_data.get('name', '<unknown>')
-            header_path = group_data.get('header_path', '<no header path>')
-
-            file.write(f"=== {group_name} ({header_path}) ===\n\n")
-
-            for function in group_data.get('functions', []):
-                func_name = function.get('func_name', '<no name>')
-                full_function = function.get('full_function', '<no full function>')
-                description = function.get('description', '<no description>')
-                parameters = function.get('parameters', {})
-                usage = function.get('usage in WS', 'None')
-
-                file.write(f"{func_name}\n")
-                file.write(f"    {full_function}\n")
-                file.write(f"    {description}\n")
-                file.write(f"    parameters:\n")
-
-                if parameters:
-                    for param_name, param_details in parameters.items():
-                        # If the parameter has 'param' and 'description' keys, print them
-                        if isinstance(param_details, dict):
-                            param_str = f"{param_details.get('param', '<no param>')}, ( {param_details.get('description', '<no description>')} )"
-                            file.write(f"        {param_str}\n")
-                        else:
-                            # If parameter is not a dictionary, print it directly
-                            file.write(f"        {param_details}\n")
-                else:
-                    file.write("        <no parameters>\n")
-
-                file.write("    usage in WS:\n")
-                if isinstance(usage, list):
-                    for entry in usage:
-                        file.write(f"        {entry}\n")
-                else:
-                    file.write(f"        {usage}\n")
-
-                file.write("\n")  # Extra space between functions
-
-
 def write_in_info(all_groups, output_path):
     """
     Write info about the chosen layer's function to a text file.
@@ -1101,6 +1035,118 @@ def write_in_info(all_groups, output_path):
 
                 f.write("\n")  # space between functions
             f.write("\n" + "="*60 + "\n\n")  # separator between groups
+
+def extract_caller_groups(all_groups):
+    """
+    Extracts unique caller groups and maps them to parameters used in functions called within them.
+
+    Returns:
+        caller_groups (set): Set of all caller group names.
+        caller_group_params (dict): Dict mapping caller group -> param_name -> {description, group}
+    """
+    caller_groups = set()
+    caller_group_params = {}
+
+    for group in all_groups.values():
+        group_name = group.get("name", "Unknown Group")
+        for func in group.get("functions", []):
+            usage_list = func.get("usage in WS", [])
+            if isinstance(usage_list, str):
+                if usage_list.strip().lower().startswith("none"):
+                    continue
+                usage_list = [usage_list]
+
+            for usage_path in usage_list:
+                path = usage_path.split(":")[0].strip()
+                if path.lower().startswith("none"):
+                    continue
+
+                parts = path.split("/")
+                if len(parts) < 2:
+                    continue
+
+                # Detect repo
+                repo = parts[0]
+                caller_group = None
+
+                if repo not in {"zephyr", "nrf"}:
+                    caller_group = path
+                else:
+                    try:
+                        if repo == "zephyr":
+                            if parts[1] == "subsys":
+                                if parts[2] == "bluetooth":
+                                    if parts[3] == "host":
+                                        filename = os.path.basename(path)
+                                        caller_group = f"{filename.split('.')[0]} - zephyr"
+                                    else:
+                                        caller_group = f"{parts[3]} - zephyr"
+                                else:
+                                    caller_group = f"{parts[2]} - zephyr"
+                            else:
+                                caller_group = f"{parts[1]} - zephyr"
+                        elif repo == "nrf":
+                            if parts[1] == "samples":
+                                caller_group = "samples - nrf"
+                            elif parts[1] == "subsys":
+                                if parts[2] == "bluetooth":
+                                    caller_group = f"{parts[3]} - nrf"
+                                else:
+                                    caller_group = f"{parts[2]} - nrf"
+                            else:
+                                caller_group = f"{parts[1]} - nrf"
+                    except IndexError:
+                        caller_group = path
+
+                if not caller_group or caller_group.lower() == "none":
+                    continue
+
+                caller_groups.add(caller_group)
+                if caller_group not in caller_group_params:
+                    caller_group_params[caller_group] = {}
+
+                # Process parameters
+                params = func.get("parameters", {})
+                for param_name, param_info in params.items():
+                    # Normalize
+                    if param_name in caller_group_params[caller_group]:
+                        continue  # Already added
+
+                    if isinstance(param_info, dict):
+                        desc = param_info.get("description", param_info.get("param", ""))
+                    else:
+                        desc = param_info
+
+                    caller_group_params[caller_group][param_name] = {
+                        "description": desc,
+                        "group": group_name
+                    }
+
+    return caller_groups, caller_group_params
+
+def write_caller_group_params_to_file(caller_group_params, filepath="caller_group_params.txt", layer):
+    with open(filepath, "w", encoding="utf-8") as f:
+
+        f.write(f"====== Input parameters sorted in modules that call {layer} functions ======\n")
+        for group in sorted(caller_group_params):
+            f.write(f"=== {group} ===\n")
+
+            # Build and format all lines first to align brackets
+            lines = []
+            max_line_len = 0
+
+            for param, info in caller_group_params[group].items():
+                desc = info['description']
+                to_group = info['group']
+                line = f"  {param}: {desc}"
+                lines.append((line, to_group))
+                max_line_len = max(max_line_len, len(line))
+
+            for line, to_group in lines:
+                padding = " " * (max_line_len - len(line) + 1)  # +1 space before bracket
+                f.write(f"{line}{padding}({to_group})\n")
+
+            f.write("\n")  # Separate groups
 
 def extract_common_folders(header_paths: List[str]) -> List[str]:
     """
@@ -1482,7 +1528,10 @@ def main():
 
     pattern = extract_function_patterns(all_groups)
     print("Grepping in the workspace for following patterns:")
-    print(pattern)
+    for func_pattern in pattern:
+        print(func_pattern)
+    print()
+    print("If you see many patterns here, probably means naming conventions in the header isn't followed or the header has many sub-modules.")
     print()
     print("Grepping, this might take a longer moment.")
 
@@ -1499,9 +1548,11 @@ def main():
     all_groups_file = f"{layer}_IN_grouped.txt"
     write_in_info(all_groups, all_groups_file)
 
-    write_group_summary_to_file(all_groups, "function_summary.txt")
+    caller_groups, caller_group_params = extract_caller_groups(all_groups)
+    in_grouped_params_file = f"IN_grouped_{layer}_params.txt"
+    write_caller_group_params_to_file(caller_group_params, in_grouped_params_file, layer)
 
-
+######## Try with CONN, there might be MAAANY c-files, because of the different function names, so make it user interactible.
     ### OUT ###
     # # Extract common folders
     # common_folders = extract_common_folders(header_list)
