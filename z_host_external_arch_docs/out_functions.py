@@ -366,19 +366,3 @@ def extract_declarations_for_known_calls(function_calls: Dict[str, Dict[str, Dic
 
     return updated_calls
 
-
-def write_output_to_file(function_calls: Dict[str, Dict[str, Dict[str, List[str]]]], output_file: str) -> None:
-    with open(output_file, 'w') as f:
-        for file, data in function_calls.items():
-            f.write(f"File: {file}\n")
-            if "function_declarations" in data:
-                for func, locations in data["function_declarations"].items():
-                    f.write(f"  {func} (declared):\n")
-                    for loc in locations:
-                        f.write(f"    - {loc}\n")
-            if "function_calls" in data:
-                for func, locations in data["function_calls"].items():
-                    f.write(f"  {func} (called):\n")
-                    for loc in locations:
-                        f.write(f"    - {loc}\n")
-            f.write("\n")
