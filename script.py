@@ -60,7 +60,7 @@ def find_function_calls(directory, patterns, ignore_paths):
                 # Skip unwanted paths
                 if any(ignore_path in file_path for ignore_path in ignore_paths):
                     continue
-                if "test" in file_path or "mock" in file_path or pattern in file_path:
+                if "test" in file_path or "mock" in file_path or "classic" in file_path or pattern in file_path:
                     continue
 
                 # Match the function call line and extract function name
@@ -991,7 +991,7 @@ def add_usage_to_groups(groups, lookup_table):
                 # Determine if group name contains 'internal' (case-insensitive)
                 group_name = group_data.get('name', '').lower()
                 if 'internal' in group_name:
-                    function_dict['usage in WS'] = "None: internal header function, why does this function exist?"
+                    function_dict['usage in WS'] = "None: internal header function, why does this function exist? Just for tests?"
                 else:
                     function_dict['usage in WS'] = "None: external header function, can be called by customers or from anywhere."
 
@@ -1060,6 +1060,48 @@ def write_group_summary_to_file(groups, output_path):
 
                 file.write("\n")  # Extra space between functions
 
+
+def write_in_info(all_groups, output_path):
+    """
+    Write info about the chosen layer's function to a text file.
+
+    Args:
+        all_groups (dict): A dictionary where each key is a group name and each value is a dict
+                           with group metadata (e.g., name, header_path, and list of functions).
+                           Each function entry includes keys like 'full_function', 'func_name',
+                           'description', 'parameters', and 'usage in WS'.
+        output_path (str): Path to the output text file to be written.
+
+    Returns:
+        None. Writes formatted content to the specified file.
+    """
+    with open(output_path, "w") as f:
+        for group_key, group in all_groups.items():
+            f.write(f"Group: {group['name']}\n")
+            f.write(f"Header: {group['header_path']}\n\n")
+
+            for func in group.get("functions", []):
+                f.write(f"  Function: {func['func_name']}\n")
+                f.write(f"    Full Function: {func['full_function']}\n")
+                f.write(f"    Description: {func['description']}\n")
+
+                f.write(f"    Parameters:\n")
+                for param, desc in func.get("parameters", {}).items():
+                    f.write(f"      {param}: {desc}\n")
+
+                f.write(f"    Usage in WS:\n")
+                usage = func.get("usage in WS", [])
+                if isinstance(usage, list):
+                    for u in usage:
+                        f.write(f"      - {u}\n")
+                elif isinstance(usage, str):
+                    f.write(f"      {usage}\n")
+                else:
+                    f.write(f"      N/A\n")
+
+                f.write("\n")  # space between functions
+            f.write("\n" + "="*60 + "\n\n")  # separator between groups
+
 def extract_common_folders(header_paths: List[str]) -> List[str]:
     """
     Extracts folder names that are common across all given header paths.
@@ -1096,7 +1138,7 @@ def extract_common_folders(header_paths: List[str]) -> List[str]:
 def find_c_files(common_folders: List[str]) -> List[str]:
     """
     Finds all .c source files within folders that include the common folder names in order.
-    Excludes any paths containing 'mock', 'test', or 'sample'.
+    Excludes any paths containing 'mock', 'test', 'sample', 'classic', or 'shell'.
 
     Args:
         common_folders (List[str]): Ordered list of common folders to match in the path.
@@ -1107,7 +1149,7 @@ def find_c_files(common_folders: List[str]) -> List[str]:
     matching_files = []
     for dirpath, _, filenames in os.walk("."):
         # Skip paths containing mock or test directories
-        if any(x in dirpath for x in ["mock", "test", "sample"]):
+        if any(x in dirpath for x in ["mock", "test", "sample", "classic", "shell"]):
             continue
 
         path_parts = dirpath.split(os.sep)
@@ -1329,7 +1371,7 @@ def extract_declarations_for_known_calls(function_calls: Dict[str, Dict[str, Dic
     disallowed_keywords = {"typedef", "inline"}
 
     for dirpath, _, filenames in os.walk("."):
-        if any(skip in dirpath for skip in ["mock", "test", "sample"]):
+        if any(skip in dirpath for skip in ["mock", "test", "sample", "classic", "shell"]):
             continue
 
         for file in filenames:
@@ -1438,132 +1480,131 @@ def main():
     # with open(all_groups_file, "w", encoding="utf-8") as file:
     #     json.dump(all_groups, file, indent=4)
 
-    # pattern = extract_function_patterns(all_groups)
-    # print("Grepping in the workspace for following patterns:")
-    # print(pattern)
-    # print()
-    # print("Grepping, this might take a longer moment.")
+    pattern = extract_function_patterns(all_groups)
+    print("Grepping in the workspace for following patterns:")
+    print(pattern)
+    print()
+    print("Grepping, this might take a longer moment.")
 
-    # # search for function calls in the current directory
-    # directory = "."  # current directory
-    # lookup_table = find_function_calls(directory, pattern, header_list)
-    # # Save the newly generated lookup table
-    # lookup_table_file = f"lookup_{layer}.txt"
-    # with open(lookup_table_file, "w", encoding="utf-8") as file:
-    #     json.dump(lookup_table, file, indent=4)
+    # search for function calls in the current directory
+    directory = "."  # current directory
+    lookup_table = find_function_calls(directory, pattern, header_list)
+    # Save the newly generated lookup table
+    lookup_table_file = f"lookup_{layer}.txt"
+    with open(lookup_table_file, "w", encoding="utf-8") as file:
+        json.dump(lookup_table, file, indent=4)
 
-    # add_usage_to_groups(all_groups, lookup_table)
-    # # Save the newly generated lookup table
-    # all_groups_file = f"all_groups_new_{layer}.txt"
-    # with open(all_groups_file, "w", encoding="utf-8") as file:
-    #     json.dump(all_groups, file, indent=4)
+    add_usage_to_groups(all_groups, lookup_table)
+    # Save the newly generated lookup table
+    all_groups_file = f"{layer}_IN_grouped.txt"
+    write_in_info(all_groups, all_groups_file)
 
-    # write_group_summary_to_file(all_groups, "function_summary.txt")
+    write_group_summary_to_file(all_groups, "function_summary.txt")
 
 
     ### OUT ###
-    # Extract common folders
-    common_folders = extract_common_folders(header_list)
-    # print(common_folders) # Debug print, comment-in if needed
+    # # Extract common folders
+    # common_folders = extract_common_folders(header_list)
+    # # print(common_folders) # Debug print, comment-in if needed
 
-    # Find all relevant .c files
-    c_files = find_c_files(common_folders)
-    # # Debug print, comment-in if needed
-    # for file in c_files:
-    #     print(file)
+    # # Find all relevant .c files
+    # c_files = find_c_files(common_folders)
+    # # # Debug print, comment-in if needed
+    # # for file in c_files:
+    # #     print(file)
 
-    # From the group, extract all functions
-    group_functions = []
-    for group in all_groups.values():
-        for fn in group["functions"]:
-            group_functions.append(fn["full_function"])
-    # # Debug print, comment-in if needed
-    # for group in group_functions:
+    # # From the group, extract all functions
+    # group_functions = []
+    # for group in all_groups.values():
+    #     for fn in group["functions"]:
+    #         group_functions.append(fn["full_function"])
+    # # # Debug print, comment-in if needed
+    # # for group in group_functions:
+    # #     print(group)
+
+    # # Filter only those .c files which define at least one group function
+    # matched_files = filter_files_with_function_definitions(c_files, group_functions)
+    # # print(matched_files) # Debug print, comment-in if needed
+
+    # # Extract all function calls (not necessarily group functions) from those matched .c files
+    # function_calls = extract_function_calls(matched_files, layer)
+
+    # output_file = f"OUT_{layer}.txt"
+    # with open(output_file, "w", encoding="utf-8") as f:
+    #     for file, calls in function_calls.items():
+    #         f.write(f"\nFile: {file}\n")
+    #         for call, locations in sorted(calls.items()):
+    #             f.write(f"  {call}:\n")
+    #             for loc in sorted(locations):
+    #                 f.write(f"    - {loc}\n")
+    # # # Debug print, comment-in if needed
+    # # for file, calls in function_calls.items():
+    # #     print(f"\nFile: {file}")
+    # #     for call, locations in sorted(calls.items()):
+    # #         print(f"  {call}:")
+    # #         for loc in sorted(locations):
+    # #             print(f"    - {loc}")
+
+    # groups = get_function_groups_from_user(function_calls)
+    # for group in groups:
     #     print(group)
+    # grouped = group_function_calls_by_keyword(function_calls, groups)
 
-    # Filter only those .c files which define at least one group function
-    matched_files = filter_files_with_function_definitions(c_files, group_functions)
-    # print(matched_files) # Debug print, comment-in if needed
-
-    # Extract all function calls (not necessarily group functions) from those matched .c files
-    function_calls = extract_function_calls(matched_files, layer)
-
-    output_file = f"OUT_{layer}.txt"
-    with open(output_file, "w", encoding="utf-8") as f:
-        for file, calls in function_calls.items():
-            f.write(f"\nFile: {file}\n")
-            for call, locations in sorted(calls.items()):
-                f.write(f"  {call}:\n")
-                for loc in sorted(locations):
-                    f.write(f"    - {loc}\n")
+    # calls_with_decls = extract_declarations_for_known_calls(function_calls, grouped, layer)
     # # Debug print, comment-in if needed
-    # for file, calls in function_calls.items():
+    # for file, data in calls_with_decls.items():
     #     print(f"\nFile: {file}")
-    #     for call, locations in sorted(calls.items()):
-    #         print(f"  {call}:")
-    #         for loc in sorted(locations):
-    #             print(f"    - {loc}")
-
-    groups = get_function_groups_from_user(function_calls)
-    for group in groups:
-        print(group)
-    grouped = group_function_calls_by_keyword(function_calls, groups)
-
-    calls_with_decls = extract_declarations_for_known_calls(function_calls, grouped, layer)
-    # Debug print, comment-in if needed
-    for file, data in calls_with_decls.items():
-        print(f"\nFile: {file}")
-        if "function_declarations" in data:
-            print("  Declarations:")
-            for func, locations in data["function_declarations"].items():
-                print(f"    {func}:")
-                for loc in locations:
-                    print(f"      - {loc}")
-        if "function_calls" in data:
-            print("  Calls:")
-            for func, locations in data["function_calls"].items():
-                print(f"    {func}:")
-                for loc in locations:
-                    print(f"      - {loc}")
+    #     if "function_declarations" in data:
+    #         print("  Declarations:")
+    #         for func, locations in data["function_declarations"].items():
+    #             print(f"    {func}:")
+    #             for loc in locations:
+    #                 print(f"      - {loc}")
+    #     if "function_calls" in data:
+    #         print("  Calls:")
+    #         for func, locations in data["function_calls"].items():
+    #             print(f"    {func}:")
+    #             for loc in locations:
+    #                 print(f"      - {loc}")
 
 
-    # Write all function calls to output file
-    write_output_to_file(calls_with_decls, "out_calls.txt")
+    # # Write all function calls to output file
+    # write_output_to_file(calls_with_decls, "out_calls.txt")
 
-    # print("Work Space searched through . . .")
+    # # print("Work Space searched through . . .")
 
-    # # extract function in {layer} headers and match them with lookup table info,
-    # # remove from lookup table after processed
-    # all_groups = {}
-    # for header in header_list:
-    #     if contains_groups(header):
-    #         groups_info, lookup_table = save_function_names(header, True, lookup_table)
-    #     else:
-    #         groups_info, lookup_table = save_function_names(header, False, lookup_table)
-    #     all_groups.update(groups_info)
-    # # Save the newly generated lookup table
-    # all_groups_file = f"all_groups_{layer}.txt"
-    # with open(all_groups_file, "w", encoding="utf-8") as file:
-    #     json.dump(all_groups, file, indent=4)
+    # # # extract function in {layer} headers and match them with lookup table info,
+    # # # remove from lookup table after processed
+    # # all_groups = {}
+    # # for header in header_list:
+    # #     if contains_groups(header):
+    # #         groups_info, lookup_table = save_function_names(header, True, lookup_table)
+    # #     else:
+    # #         groups_info, lookup_table = save_function_names(header, False, lookup_table)
+    # #     all_groups.update(groups_info)
+    # # # Save the newly generated lookup table
+    # # all_groups_file = f"all_groups_{layer}.txt"
+    # # with open(all_groups_file, "w", encoding="utf-8") as file:
+    # #     json.dump(all_groups, file, indent=4)
 
-    # print("Matched functions to workspace database . . .")
+    # # print("Matched functions to workspace database . . .")
 
-    # # printing
-    # print_functions_simple(all_groups, layer)
+    # # # printing
+    # # print_functions_simple(all_groups, layer)
 
-    # print_functions_moduels(all_groups, layer)
+    # # print_functions_moduels(all_groups, layer)
 
-    # print_functions_groups(all_groups, layer)
+    # # print_functions_groups(all_groups, layer)
 
-    # # make UMLs
-    # generate_uml_sequence_diagrams(all_groups, layer)
+    # # # make UMLs
+    # # generate_uml_sequence_diagrams(all_groups, layer)
 
-    # # make deployment diagram
-    # generate_deployment_diagrams(all_groups, layer)
-    # generate_deployment_diagram(all_groups, layer)
+    # # # make deployment diagram
+    # # generate_deployment_diagrams(all_groups, layer)
+    # # generate_deployment_diagram(all_groups, layer)
 
 
-    # # generate_layered_callout_diagram(all_groups, layer)
+    # # # generate_layered_callout_diagram(all_groups, layer)
 
 # Run the script if executed directly
 if __name__ == "__main__":
