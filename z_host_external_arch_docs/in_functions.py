@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+from general import STANDARD_C_TYPES
 
 def find_function_calls(directory, patterns, ignore_paths):
     lookup_table = []
@@ -252,25 +253,85 @@ def extract_caller_groups(all_groups):
 
     return caller_groups, caller_group_params
 
-def write_caller_group_params_to_file(caller_group_params, filepath, layer):
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"====== Input parameters sorted in modules that call {layer} functions ======\n")
-        for group in sorted(caller_group_params):
-            f.write(f"=== {group} ===\n")
+def is_standard_c_type(param_str):
+    tokens = re.split(r"[ *]+", param_str.replace("const", "").strip())
+    return any(t in STANDARD_C_TYPES for t in tokens if t)
 
-            lines = []
-            max_param_len = 0
+def find_header_files(base_dir, subdir):
+    matching_headers = []
+    for root, _, files in os.walk(os.path.join(base_dir, subdir)):
+        if "test" in root or "mock" in root:
+            continue
+        for file in files:
+            if file.endswith(".h"):
+                matching_headers.append(os.path.join(root, file))
+    return matching_headers
 
-            for clean_param, info in caller_group_params[group].items():
-                group_list = sorted(info["groups"])
-                group_str = ", ".join(group_list)
-                desc = info["description"] if info["description"] else "None"
-                lines.append((clean_param, group_str, desc))
-                max_param_len = max(max_param_len, len(clean_param))
+def extract_comment_above(lines, def_index):
+    comment_lines = []
+    i = def_index - 1
+    while i >= 0:
+        line = lines[i].strip()
+        if line == "" or line.endswith("*/"):
+            i -= 1
+            continue
+        if line.startswith("//") or line.startswith("/*") or line.startswith("/**"):
+            comment_lines.insert(0, line.lstrip("/* ").rstrip("*/").strip())
+            i -= 1
+        else:
+            break
+    return " ".join(comment_lines) if comment_lines else None
 
-            for clean_param, group_str, desc in lines:
-                padding = " " * (max_param_len - len(clean_param) + 2)  # +2 for spacing
-                f.write(f"  {clean_param}{padding}({group_str})\n")
-                f.write(f"    Description: {desc}\n")
+def add_param_def_info(caller_group_params, header_list, base_dir="."):
+    grouped_params = caller_group_params
 
-            f.write("\n")
+    for caller_group, params in grouped_params.items():
+        base_key = caller_group.split(" - ")[0]
+        repo = caller_group.split(" - ")[-1]
+        calling_headers = find_header_files(base_dir, base_key)
+
+        for param_name, info in params.items():
+            clean_param = param_name
+            param_type = clean_param.replace(param_name, "").strip()
+            if is_standard_c_type(clean_param):
+                continue
+
+            found = False
+            search_terms = set()
+
+            # Extract type for search term
+            struct_match = re.search(r"(struct\s+\w+)", clean_param)
+            if struct_match:
+                search_terms.add(struct_match.group(1))
+            else:
+                tokens = clean_param.replace("*", "").split()
+                for tok in tokens:
+                    if tok not in STANDARD_C_TYPES and tok not in {"const", "volatile"}:
+                        search_terms.add(tok)
+
+            for header in header_list + calling_headers:
+                try:
+                    with open(header, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+
+                    for idx, line in enumerate(lines):
+                        for term in search_terms:
+                            if re.search(rf"\b{re.escape(term)}\b.*[{{;]", line):
+                                # Found match
+                                comment = extract_comment_above(lines, idx)
+                                info["def_location"] = f"{os.path.relpath(header, base_dir)}:{idx + 1}"
+                                if comment and "None" in info["description"]:
+                                    info["description"] = comment
+                                elif comment:
+                                    info["description"] += f" | {comment}"
+                                found = True
+                                break
+                        if found:
+                            break
+                except Exception as e:
+                    continue
+
+            if not found:
+                info["def_location"] = "Not found, need to search manually"
+
+    return grouped_params

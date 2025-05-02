@@ -1,4 +1,6 @@
 
+from typing import List, Dict
+
 def print_functions_simple(all_groups, layer):
     general_filename = f"{layer}_functions.txt"
 
@@ -235,4 +237,27 @@ def write_output_to_file(function_calls: Dict[str, Dict[str, Dict[str, List[str]
                     f.write(f"  {func} (called):\n")
                     for loc in locations:
                         f.write(f"    - {loc}\n")
+            f.write("\n")
+
+def write_caller_group_params_to_file(caller_group_params, filepath, layer):
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"====== Input parameters sorted in modules that call {layer} functions ======\n")
+        for group in sorted(caller_group_params):
+            f.write(f"{group}:\n")
+
+            lines = []
+            max_param_len = 0
+
+            for clean_param, info in caller_group_params[group].items():
+                group_list = sorted(info["groups"])
+                group_str = ", ".join(group_list)
+                lines.append((clean_param, group_str, info.get("description", "None"), info.get("def_location", "")))
+                max_param_len = max(max_param_len, len(clean_param))
+
+            for clean_param, group_str, desc, def_loc in lines:
+                padding = " " * (max_param_len - len(clean_param) + 2)
+                f.write(f"  {clean_param}{padding}({group_str})\n")
+                f.write(f"    Description: {desc}\n")
+                f.write(f"    Defined at:  {def_loc}\n")
+
             f.write("\n")

@@ -1,6 +1,13 @@
 import os
 import re
 
+STANDARD_C_TYPES = {
+    'static', 'extern', 'register', 'auto', 'inline', 'int', 'short', 'long',
+    'signed', 'unsigned', 'char', 'bool', 'uint8_t', 'uint16_t', 'uint32_t',
+    'uint64_t', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'float', 'double',
+    'long double', 'void', '_Bool', 'volatile', 'const', 'restrict'
+}
+
 # Function to find header files containing the specified word in their names
 def find_headers(word, directory='zephyr'):
     # Create a regex pattern to match the word in the filename (case-insensitive)
@@ -173,12 +180,8 @@ def extract_function_name(function_line):
     :param function_line: The function signature as a string.
     :return: The extracted function name.
     """
-    c_types = ['static', 'extern', 'register', 'auto', 'inline', 'int', 'short', 'long',
-               'signed', 'unsigned', 'char', 'bool', 'uint8_t', 'uint16_t', 'uint32_t',
-               'uint64_t', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'float', 'double',
-               'long double', 'void', '_Bool', 'volatile', 'const', 'restrict']
 
-    for keyword in sorted(c_types, key=len, reverse=True): # Sort by length to avoid partial replacements
+    for keyword in sorted(STANDARD_C_TYPES, key=len, reverse=True): # Sort by length to avoid partial replacements
         function_line = re.sub(r'\b' + re.escape(keyword) + r'\b', '', function_line)
 
     function_name = function_line.strip().split('(')[0].strip()
