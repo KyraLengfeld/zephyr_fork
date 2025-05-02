@@ -268,8 +268,10 @@ def get_params(lines, function_line):
     for param in cleaned_params:
         words = param.split()
         if len(words) > 1:
-            last_word = words[-1]  # Last word is typically the variable name
-            function_params[last_word] = param  # Store full declaration
+            param_name = words[-1]
+            function_params[param_name] = {
+                'clean_param': param
+            }
 
     # Now, search for @param descriptions in the preceding comment block
     for i in range(function_line - 1, -1, -1):  # Loop upwards through the file
@@ -285,11 +287,7 @@ def get_params(lines, function_line):
             match = re.search(rf'@param\s+{re.escape(param_name)}\s+(.*)', line)
             if match:
                 description = match.group(1).strip()
-                function_params[param_name] = {
-                    'param': function_params[param_name],
-                    'description': description
-                }
-
+                function_params[param_name]['description'] = description
     return function_params
 
 def find_usage_of_funcs(target_function, lookup_table):
@@ -489,7 +487,13 @@ def print_functions_simple(all_groups, layer):
                 output_file.write(f"  function name: {function['func_name']}\n")  # Print function name
                 output_file.write(f"  function: {function['full_function']}\n")  # Print function
                 output_file.write(f"  Parameters: {function['parameters']}\n")  # Print function params
-                output_file.write(f"  Description: {function['description']}\n")  # Print function description
+                # output_file.write("  Parameters:\n")
+                # for param_name, param_info in function['parameters'].items():
+                #     if 'description' in param_info:
+                #         output_file.write(f"    {param_info['clean_param']}: {param_info['description']}\n")
+                #     else:
+                #         output_file.write(f"    {param_info['clean_param']}\n")
+                # output_file.write(f"  Description: {function['description']}\n")  # Print function description
                 for subgroup, paths in function['usage_paths'].items():
                     if paths:
                         output_file.write(f"    {subgroup}:\n")
@@ -530,7 +534,13 @@ def print_functions_moduels(all_groups, layer):
                         output_file.write(f"  Function name: {function['func_name']}\n")
                         output_file.write(f"  {function['full_function']}\n")
                         output_file.write(f"  Parameters: {function['parameters']}\n")
-                        output_file.write(f"  Description: {function['description']}\n")
+                        # output_file.write("  Parameters:\n")
+                        # for param_name, param_info in function['parameters'].items():
+                        #     if 'description' in param_info:
+                        #         output_file.write(f"    {param_info['clean_param']}: {param_info['description']}\n")
+                        #     else:
+                        #         output_file.write(f"    {param_info['clean_param']}\n")
+                        # output_file.write(f"  Description: {function['description']}\n")
 
                         # Print all paths associated with this function in the subgroup
                         for path in function['usage_paths'][subgroup]:
@@ -561,6 +571,12 @@ def print_functions_groups(all_groups, layer):
                 output_file.write(f"  function name: {function['func_name']}\n")  # Print function name
                 output_file.write(f"  function: {function['full_function']}\n")  # Print function
                 output_file.write(f"  Parameters: {function['parameters']}\n")  # Print function params
+                # output_file.write("  Parameters:\n")
+                # for param_name, param_info in function['parameters'].items():
+                #     if 'description' in param_info:
+                #         output_file.write(f"    {param_info['clean_param']}: {param_info['description']}\n")
+                #     else:
+                #         output_file.write(f"    {param_info['clean_param']}\n")
                 output_file.write(f"  Description: {function['description']}\n")  # Print function description
                 for subgroup, paths in function['usage_paths'].items():
                     if paths:
@@ -1019,9 +1035,13 @@ def write_in_info(all_groups, output_path):
                 f.write(f"    Full Function: {func['full_function']}\n")
                 f.write(f"    Description: {func['description']}\n")
 
-                f.write(f"    Parameters:\n")
-                for param, desc in func.get("parameters", {}).items():
-                    f.write(f"      {param}: {desc}\n")
+                for param_name, param_info in func.get("parameters", {}).items():
+                    clean_param = param_info.get("clean_param", param_name)
+                    description = param_info.get("description")
+                    if description:
+                        f.write(f"      {clean_param}: {description}\n")
+                    else:
+                        f.write(f"      {clean_param}\n")
 
                 f.write(f"    Usage in WS:\n")
                 usage = func.get("usage in WS", [])
@@ -1108,45 +1128,41 @@ def extract_caller_groups(all_groups):
                 # Process parameters
                 params = func.get("parameters", {})
                 for param_name, param_info in params.items():
-                    # Normalize
-                    if param_name in caller_group_params[caller_group]:
-                        continue  # Already added
+                    clean_param = param_info.get("clean_param", param_name)
+                    desc = param_info.get("description", param_info.get("param", ""))
 
-                    if isinstance(param_info, dict):
-                        desc = param_info.get("description", param_info.get("param", ""))
+                    if clean_param in caller_group_params[caller_group]:
+                        caller_group_params[caller_group][clean_param]["groups"].add(group_name)
                     else:
-                        desc = param_info
-
-                    caller_group_params[caller_group][param_name] = {
-                        "description": desc,
-                        "group": group_name
-                    }
+                        caller_group_params[caller_group][clean_param] = {
+                            "description": desc,
+                            "groups": {group_name}
+                        }
 
     return caller_groups, caller_group_params
 
-def write_caller_group_params_to_file(caller_group_params, filepath="caller_group_params.txt", layer):
+def write_caller_group_params_to_file(caller_group_params, filepath, layer):
     with open(filepath, "w", encoding="utf-8") as f:
-
         f.write(f"====== Input parameters sorted in modules that call {layer} functions ======\n")
         for group in sorted(caller_group_params):
             f.write(f"=== {group} ===\n")
 
-            # Build and format all lines first to align brackets
             lines = []
-            max_line_len = 0
+            max_param_len = 0
 
-            for param, info in caller_group_params[group].items():
-                desc = info['description']
-                to_group = info['group']
-                line = f"  {param}: {desc}"
-                lines.append((line, to_group))
-                max_line_len = max(max_line_len, len(line))
+            for clean_param, info in caller_group_params[group].items():
+                group_list = sorted(info["groups"])
+                group_str = ", ".join(group_list)
+                desc = info["description"] if info["description"] else "None"
+                lines.append((clean_param, group_str, desc))
+                max_param_len = max(max_param_len, len(clean_param))
 
-            for line, to_group in lines:
-                padding = " " * (max_line_len - len(line) + 1)  # +1 space before bracket
-                f.write(f"{line}{padding}({to_group})\n")
+            for clean_param, group_str, desc in lines:
+                padding = " " * (max_param_len - len(clean_param) + 2)  # +2 for spacing
+                f.write(f"  {clean_param}{padding}({group_str})\n")
+                f.write(f"    Description: {desc}\n")
 
-            f.write("\n")  # Separate groups
+            f.write("\n")
 
 def extract_common_folders(header_paths: List[str]) -> List[str]:
     """
