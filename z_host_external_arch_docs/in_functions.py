@@ -4,19 +4,27 @@ import subprocess
 from general import STANDARD_C_TYPES
 
 def find_function_calls(directory, patterns, ignore_paths):
+    """
+    Searches through .c and .h files for function calls matching given patterns,
+    while ignoring specific paths and filenames.
+
+    Parameters:
+    - directory (str): The root directory to search in.
+    - patterns (list of str): Function name fragments to grep for.
+    - ignore_paths (list of str): Paths to exclude from results.
+
+    Returns:
+    - list of dicts: Each dict represents a function call with file, line number, etc.
+    """
     lookup_table = []
 
     for pattern in patterns:
-
-        print(f"Currently grepping for: {pattern}")
-        # Compile a regex to extract function calls for this pattern
+        print(f"Currently grepping for: {pattern}")  # Debug print
         escaped_pattern = re.escape(pattern)
         function_call_pattern = re.compile(r'\b([a-zA-Z0-9_]*' + escaped_pattern + r'[a-zA-Z0-9_]*)\s*\(')
 
-        # Construct the grep command for the current pattern
         grep_pattern = rf'\b[a-zA-Z0-9_]*{pattern}[a-zA-Z0-9_]*\s*\('
-
-        grep_command = (f'grep -rnE "{grep_pattern}" {directory} --include="*.c" --include="*.h"')
+        grep_command = f'grep -rnE "{grep_pattern}" {directory} --include="*.c" --include="*.h"'
 
         try:
             grep_output = subprocess.run(grep_command, shell=True, capture_output=True, text=True)
@@ -28,13 +36,11 @@ def find_function_calls(directory, patterns, ignore_paths):
                 file_path, line_number, code_line = parts
                 line_number = int(line_number.strip())
 
-                # Skip unwanted paths
                 if any(ignore_path in file_path for ignore_path in ignore_paths):
                     continue
                 if "test" in file_path or "mock" in file_path or "classic" in file_path or pattern in file_path:
                     continue
 
-                # Match the function call line and extract function name
                 matches = function_call_pattern.finditer(code_line)
                 for match_call in matches:
                     function_name = match_call.group(1)
@@ -49,10 +55,20 @@ def find_function_calls(directory, patterns, ignore_paths):
         except Exception as e:
             print(f"Error running grep for pattern '{pattern}': {e}")
 
-    print("Lookup table generated and saved to file.")
+    # # Debug print, comment in when needed.
+    # print("Lookup table generated.")
     return lookup_table
 
 def extract_function_patterns(groups):
+    """
+    Extracts short name patterns from functions in groups for grep searching.
+
+    Parameters:
+    - groups (dict): Dictionary with group data and their functions.
+
+    Returns:
+    - list of str: Extracted pattern names.
+    """
     patterns = []
 
     for group in groups.values():
@@ -70,27 +86,27 @@ def extract_function_patterns(groups):
 
     return patterns
 
-
 def print_functions_simple(all_groups, layer):
+    """
+    Outputs all functions and their metadata into a simple text file for a given layer.
+
+    Parameters:
+    - all_groups (dict): All grouped function data.
+    - layer (str): Current layer name for file naming.
+
+    Returns:
+    - None. Writes to a text file.
+    """
     general_filename = f"{layer}_functions.txt"
 
     with open(general_filename, "w") as output_file:
         for group, details in all_groups.items():
-            output_file.write(f"=== {details['name']} ({details['header_path']}) ===\n")
-            output_file.write("\n")
+            output_file.write(f"=== {details['name']} ({details['header_path']}) ===\n\n")
 
             for function in details['functions']:
-
                 output_file.write(f"  function name: {function['func_name']}\n")  # Print function name
-                output_file.write(f"  function: {function['full_function']}\n")  # Print function
-                output_file.write(f"  Parameters: {function['parameters']}\n")  # Print function params
-                # output_file.write("  Parameters:\n")
-                # for param_name, param_info in function['parameters'].items():
-                #     if 'description' in param_info:
-                #         output_file.write(f"    {param_info['clean_param']}: {param_info['description']}\n")
-                #     else:
-                #         output_file.write(f"    {param_info['clean_param']}\n")
-                # output_file.write(f"  Description: {function['description']}\n")  # Print function description
+                output_file.write(f"  function: {function['full_function']}\n")    # Print function
+                output_file.write(f"  Parameters: {function['parameters']}\n")     # Print function params
                 for subgroup, paths in function['usage_paths'].items():
                     if paths:
                         output_file.write(f"    {subgroup}:\n")
@@ -103,48 +119,21 @@ def print_functions_simple(all_groups, layer):
 
 def add_usage_to_groups(groups, lookup_table):
     """
-    Enhances each function in the 'groups' dictionary by adding a 'usage in WS' key.
-    This key contains a list of all locations where the function is called, based on the lookup_table.
-    If there are no usages found, the value will be the string "none".
+    Updates each function in the groups with usage information from the workspace.
 
     Parameters:
-    - groups (dict): Dictionary structured as:
-        groups[group_key] = {
-            'name': filename,
-            'header_path': header_path,
-            'functions': [
-                {
-                    'full_function': ...,
-                    'func_name': ...,
-                    'description': ...,
-                    'parameters': ...,
-                },
-                ...
-            ]
-        }
-
-    - lookup_table (list): List of dictionaries, each like:
-        {
-            'function_name': ...,
-            'file_path': ...,
-            'line_number': ...,
-            'type': 'call'
-        }
+    - groups (dict): Grouped header/function data.
+    - lookup_table (list of dicts): Function call locations.
 
     Returns:
-    - None. The function modifies the 'groups' dictionary in-place.
+    - None. Modifies groups in-place.
     """
-
-    # Iterate over all groups
     for group_key, group_data in groups.items():
-        # Make sure 'functions' is present and is a list
         functions = group_data.get('functions', [])
 
         for function_dict in functions:
             func_name = function_dict.get('func_name')
             usage_list = []
-
-            # We'll track indices to remove after the loop (can't modify list during iteration)
             indices_to_remove = []
 
             for idx, usage in enumerate(lookup_table):
@@ -154,14 +143,12 @@ def add_usage_to_groups(groups, lookup_table):
                     usage_list.append(f"{file_path}:{line_number}")
                     indices_to_remove.append(idx)
 
-            # Remove used entries from lookup_table in reverse order (to keep indexing correct)
             for index in reversed(indices_to_remove):
                 del lookup_table[index]
 
             if len(usage_list) > 1:
                 function_dict['usage in WS'] = usage_list
             else:
-                # Determine if group name contains 'internal' (case-insensitive)
                 group_name = group_data.get('name', '').lower()
                 if 'internal' in group_name:
                     function_dict['usage in WS'] = "None: internal header function, why does this function exist? Just for tests?"
@@ -170,11 +157,11 @@ def add_usage_to_groups(groups, lookup_table):
 
 def extract_caller_groups(all_groups):
     """
-    Extracts unique caller groups and maps them to parameters used in functions called within them.
+    Analyzes usage paths and extracts unique caller groups and their parameter usage.
 
     Returns:
-        caller_groups (set): Set of all caller group names.
-        caller_group_params (dict): Dict mapping caller group -> param_name -> {description, group}
+    - caller_groups (set): Unique group names where calls happen.
+    - caller_group_params (dict): Mapping from caller group -> param_name -> description, source groups
     """
     caller_groups = set()
     caller_group_params = {}
@@ -197,7 +184,6 @@ def extract_caller_groups(all_groups):
                 if len(parts) < 2:
                     continue
 
-                # Detect repo
                 repo = parts[0]
                 caller_group = None
 
@@ -237,7 +223,6 @@ def extract_caller_groups(all_groups):
                 if caller_group not in caller_group_params:
                     caller_group_params[caller_group] = {}
 
-                # Process parameters
                 params = func.get("parameters", {})
                 for param_name, param_info in params.items():
                     clean_param = param_info.get("clean_param", param_name)
@@ -254,10 +239,29 @@ def extract_caller_groups(all_groups):
     return caller_groups, caller_group_params
 
 def is_standard_c_type(param_str):
+    """
+    Determines if a given parameter string is a standard C type.
+
+    Parameters:
+    - param_str (str): The type string to check.
+
+    Returns:
+    - bool: True if it's a standard type, False otherwise.
+    """
     tokens = re.split(r"[ *]+", param_str.replace("const", "").strip())
     return any(t in STANDARD_C_TYPES for t in tokens if t)
 
 def find_header_files(base_dir, subdir):
+    """
+    Recursively finds .h files under a given subdirectory.
+
+    Parameters:
+    - base_dir (str): Base project directory.
+    - subdir (str): Subdirectory to scan.
+
+    Returns:
+    - list of str: Paths to .h files found.
+    """
     matching_headers = []
     for root, _, files in os.walk(os.path.join(base_dir, subdir)):
         if "test" in root or "mock" in root:
@@ -268,6 +272,16 @@ def find_header_files(base_dir, subdir):
     return matching_headers
 
 def extract_comment_above(lines, def_index):
+    """
+    Extracts a block of comments immediately above a line index in a source file.
+
+    Parameters:
+    - lines (list of str): File lines.
+    - def_index (int): Index of definition line.
+
+    Returns:
+    - str: Extracted comment or None.
+    """
     comment_lines = []
     i = def_index - 1
     while i >= 0:
@@ -283,6 +297,17 @@ def extract_comment_above(lines, def_index):
     return " ".join(comment_lines) if comment_lines else None
 
 def add_param_def_info(caller_group_params, header_list, base_dir="."):
+    """
+    Searches headers for parameter definitions and adds them (and their comments) to the param info.
+
+    Parameters:
+    - caller_group_params (dict): Param info with caller group mappings.
+    - header_list (list of str): Global header paths.
+    - base_dir (str): Base path for relative formatting.
+
+    Returns:
+    - dict: Enhanced param info with def_location and improved description.
+    """
     grouped_params = caller_group_params
 
     for caller_group, params in grouped_params.items():
@@ -299,7 +324,6 @@ def add_param_def_info(caller_group_params, header_list, base_dir="."):
             found = False
             search_terms = set()
 
-            # Extract type for search term
             struct_match = re.search(r"(struct\s+\w+)", clean_param)
             if struct_match:
                 search_terms.add(struct_match.group(1))
@@ -317,7 +341,6 @@ def add_param_def_info(caller_group_params, header_list, base_dir="."):
                     for idx, line in enumerate(lines):
                         for term in search_terms:
                             if re.search(rf"\b{re.escape(term)}\b.*[{{;]", line):
-                                # Found match
                                 comment = extract_comment_above(lines, idx)
                                 info["def_location"] = f"{os.path.relpath(header, base_dir)}:{idx + 1}"
                                 if comment and "None" in info["description"]:
@@ -328,7 +351,7 @@ def add_param_def_info(caller_group_params, header_list, base_dir="."):
                                 break
                         if found:
                             break
-                except Exception as e:
+                except Exception:
                     continue
 
             if not found:
