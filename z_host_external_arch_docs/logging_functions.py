@@ -240,24 +240,30 @@ def write_output_to_file(function_calls: Dict[str, Dict[str, Dict[str, List[str]
             f.write("\n")
 
 def write_caller_group_params_to_file(caller_group_params, filepath, layer):
+    layer_upper = layer.upper()
+
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"====== Input parameters sorted in modules that call {layer} functions ======\n")
+        f.write(f"## Which resources and callbacks enter the {layer_upper} module and to where.\n")
         for group in sorted(caller_group_params):
-            f.write(f"{group}:\n")
+            # Upper-case the first word of the group
+            parts = group.split()
+            if parts:
+                group_upper = parts[0].upper() + " " + " ".join(parts[1:])
+            else:
+                group_upper = group
+
+            f.write(f"### {group_upper}\n\n")
+            f.write(f"|Parameter|{layer_upper} group|Description|Defined at|\n")
+            f.write(f"|---------|-------------|-----------|----------|\n")
 
             lines = []
-            max_param_len = 0
 
             for clean_param, info in caller_group_params[group].items():
                 group_list = sorted(info["groups"])
                 group_str = ", ".join(group_list)
                 lines.append((clean_param, group_str, info.get("description", "None"), info.get("def_location", "")))
-                max_param_len = max(max_param_len, len(clean_param))
 
             for clean_param, group_str, desc, def_loc in lines:
-                padding = " " * (max_param_len - len(clean_param) + 2)
-                f.write(f"  {clean_param}{padding}({group_str})\n")
-                f.write(f"    Description: {desc}\n")
-                f.write(f"    Defined at:  {def_loc}\n")
+                f.write(f"|{clean_param}|{group_str}|{desc}|{def_loc}|\n")
 
             f.write("\n")
