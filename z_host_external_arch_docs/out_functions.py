@@ -1,7 +1,7 @@
 import os
 import re
 from typing import List, Dict
-from collections import Counter
+from collections import defaultdict, Counter
 
 def extract_function_calls(target_function, lookup_table):
     """
@@ -243,26 +243,57 @@ def get_function_groups_from_user(function_calls: Dict[str, Dict[str, Dict[str, 
     :param function_calls: Dictionary with C file paths mapping to function call data.
     :return: List of group keywords provided by the user.
     """
-    all_functions = set()
-
-    # Collect all unique function names across all files.
-    for file_data in function_calls.values():
-        if "function_calls" in file_data and file_data["function_calls"]:
-            all_functions.update(file_data["function_calls"].keys())
+    all_functions = []
+    for file, calls in function_calls.items():
+        for call, locations in sorted(calls.items()):
+            func = call.split("(", 1)[0]
+            if func not in all_functions:
+                all_functions.append(func)
 
     print("\nDetected functions:")
     for func in sorted(all_functions):
         print(func)
 
     groups = []
+    prefix_counts = defaultdict(list)
+
+    for func in all_functions:
+        words = func.split("_")
+        if len(words) >= 2:
+            prefix = "_".join(words[:2])
+            prefix_counts[prefix].append(func)
+
+    suggested = set()
+    for prefix, funcs in prefix_counts.items():
+        if len(funcs) >= 2:
+            suggested.add(prefix)
+
+    print("\nSuggested groups based on function name prefixes:")
+    for group in sorted(suggested):
+        print(group)
+
+    user_decision = input("Are these group suggestions okay? (Press 'n' or 'no' to modify): ").strip().lower()
+    if user_decision in ['n', 'no']:
+        user_input = input("Which suggested groups to keep? (space-separated): ").strip()
+        keep_groups = set(user_input.split())
+        groups.extend([g for g in suggested if g in keep_groups])
+    else:
+        groups.extend(suggested)
+
     while True:
+
+        # Show currently collected groups.
+        print(f"\nCurrent groups: {groups}\n")
+        print(f"Left 'single' functions:")
+        for func in sorted(all_functions):
+            if not any(func.startswith(group) for group in groups):
+                print(func)
+
         # Ask the user to input group keywords separated by spaces.
-        user_input = input("\nEnter group keywords (space-separated): ").strip()
+        user_input = input("\nEnter group keywords (space-separated) if you have more: ").strip()
         if user_input:
             groups.extend(user_input.split())
 
-        # Show currently collected groups.
-        print(f"\nCurrent groups: {groups}")
         more = input("More groups? (yes/y or no/n): ").strip().lower()
 
         # Handle control flow based on user response.
@@ -365,4 +396,3 @@ def extract_declarations_for_known_calls(function_calls: Dict[str, Dict[str, Dic
                     updated_calls[filepath]["function_declarations"][normalized_sig].append(loc)
 
     return updated_calls
-
