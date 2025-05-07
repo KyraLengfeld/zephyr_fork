@@ -81,7 +81,7 @@ def main():
 
     # Extract caller groups and params, then enrich with param type/def info
     caller_groups, caller_group_params = extract_caller_groups(all_groups)
-    grouped_params = add_param_def_info(caller_group_params, header_list)
+    grouped_params = add_param_def_info(caller_group_params, header_list, layer)
 
     # Save grouped param definitions
     in_grouped_params_file = f"IN_grouped_{layer}_params.txt"
