@@ -227,6 +227,8 @@ def extract_caller_groups(all_groups):
                 for param_name, param_info in params.items():
                     clean_param = param_info.get("clean_param", param_name)
                     desc = param_info.get("description", param_info.get("param", ""))
+                    print("here")
+                    print(f"{desc}")
 
                     if clean_param in caller_group_params[caller_group]:
                         caller_group_params[caller_group][clean_param]["groups"].add(group_name)
@@ -273,7 +275,7 @@ def find_header_files(base_dir, subdir):
 
 def extract_comment_above(lines, def_index):
     """
-    Extracts a block of comments immediately above a line index in a source file.
+    Extracts description in comment above a line index in a source file.
 
     Parameters:
     - lines (list of str): File lines.
@@ -282,21 +284,41 @@ def extract_comment_above(lines, def_index):
     Returns:
     - str: Extracted comment or None.
     """
-    comment_lines = []
     i = def_index - 1
+    cleaned_line = "None available."
+
     while i >= 0:
+        brief_found = False
         line = lines[i].strip()
-        if line == "" or line.endswith("*/"):
+
+        if line == "":
             i -= 1
             continue
-        if line.startswith("//") or line.startswith("/*") or line.startswith("/**"):
-            comment_lines.insert(0, line.lstrip("/* ").rstrip("*/").strip())
-            i -= 1
-        else:
-            break
-    return " ".join(comment_lines) if comment_lines else None
 
-def add_param_def_info(caller_group_params, header_list, base_dir="."):
+        # Go to beginning of the comment block
+        while i >= 0 and "/*" in line:
+            if "@brief" in line:
+                brief_found = True
+                cleaned_line = re.sub(r'(/\*\*?|(\*/)|@brief)', '', line).strip()
+                break
+            i -= 1
+            if i >= 0:
+                line = lines[i].strip()
+            else:
+                break
+
+        if ";" in line or "{" in line or "}" in line or brief_found:
+            break
+
+        i -= 1
+
+    return cleaned_line
+
+def is_standard_c_type(clean_param):
+    tokens = re.sub(r'[,*()]', '', clean_param).split()
+    return all(tok in STANDARD_C_TYPES or tok in {"const", "volatile"} for tok in tokens)
+
+def add_param_def_info(caller_group_params, header_list, layer, base_dir="."):
     """
     Searches headers for parameter definitions and adds them (and their comments) to the param info.
 
@@ -308,22 +330,27 @@ def add_param_def_info(caller_group_params, header_list, base_dir="."):
     Returns:
     - dict: Enhanced param info with def_location and improved description.
     """
+    print("\nRetrieving parameter definition paths and descriptions.\n")
     grouped_params = caller_group_params
 
     for caller_group, params in grouped_params.items():
+        if caller_group == layer:
+            continue
+        # Determine base folder from caller group name
         base_key = caller_group.split(" - ")[0]
-        repo = caller_group.split(" - ")[-1]
         calling_headers = find_header_files(base_dir, base_key)
 
         for param_name, info in params.items():
             clean_param = param_name
-            param_type = clean_param.replace(param_name, "").strip()
+
+            # Skip standard C types
             if is_standard_c_type(clean_param):
                 continue
 
             found = False
             search_terms = set()
 
+            # Extract struct or type names from param string
             struct_match = re.search(r"(struct\s+\w+)", clean_param)
             if struct_match:
                 search_terms.add(struct_match.group(1))
@@ -333,7 +360,28 @@ def add_param_def_info(caller_group_params, header_list, base_dir="."):
                     if tok not in STANDARD_C_TYPES and tok not in {"const", "volatile"}:
                         search_terms.add(tok)
 
-            for header in header_list + calling_headers:
+            # Search through the usual suspects
+            zephyr_bt_include_dir = os.path.join(base_dir, "zephyr/include/zephyr/bluetooth")
+            zephyr_bt_subsys_dir = os.path.join(base_dir, "zephyr/subsys/bluetooth/host")
+
+            zephyr_bt_headers = []
+            for root, _, files in os.walk(zephyr_bt_include_dir):
+                for file in files:
+                    if file.endswith(".h"):
+                        zephyr_bt_headers.append(os.path.join(root, file))
+            for root, _, files in os.walk(zephyr_bt_subsys_dir):
+                for file in files:
+                    if file.endswith(".h"):
+                        zephyr_bt_headers.append(os.path.join(root, file))
+
+            # Always include these
+            zephyr_bt_headers.append(os.path.join(base_dir, "zephyr/include/zephyr/kernel.h"))
+            zephyr_bt_headers.append(os.path.join(base_dir, "zephyr/include/zephyr/net_buf.h"))
+
+            # Search through all candidate header files
+            # This is taking WAY too long
+            ##TODO: remove the "double" ones
+            for header in header_list + calling_headers + zephyr_bt_headers:
                 try:
                     with open(header, "r", encoding="utf-8") as f:
                         lines = f.readlines()
@@ -341,12 +389,19 @@ def add_param_def_info(caller_group_params, header_list, base_dir="."):
                     for idx, line in enumerate(lines):
                         for term in search_terms:
                             if re.search(rf"\b{re.escape(term)}\b.*[{{;]", line):
+                            # # # # if re.search(rf"\bstruct\b.*\b{re.escape(term)}\b.*\{{", line):
                                 comment = extract_comment_above(lines, idx)
                                 info["def_location"] = f"{os.path.relpath(header, base_dir)}:{idx + 1}"
-                                if comment and "None" in info["description"]:
-                                    info["description"] = comment
-                                elif comment:
-                                    info["description"] += f" | {comment}"
+
+                                # Add comment only if relevant
+                                if comment:
+                                    if "None" in info["description"]:
+                                        info["description"] = comment
+                                    else:
+                                        info["description"] += f" | {comment}"
+                                else:
+                                    if not info["description"]:
+                                        info["description"] = "None available"
                                 found = True
                                 break
                         if found:
@@ -355,6 +410,6 @@ def add_param_def_info(caller_group_params, header_list, base_dir="."):
                     continue
 
             if not found:
-                info["def_location"] = "Not found, need to search manually"
+                info["def_location"] = "Not found."
 
     return grouped_params
