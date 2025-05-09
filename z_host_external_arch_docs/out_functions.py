@@ -1,6 +1,6 @@
 import os
 import re
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from collections import defaultdict, Counter
 
 def extract_function_calls(target_function, lookup_table):
@@ -236,73 +236,40 @@ def extract_function_calls(c_files: List[str], layer: str) -> Dict[str, Dict[str
         calls_per_file[filepath] = file_calls
     return calls_per_file
 
-def get_function_groups_from_user(function_calls: Dict[str, Dict[str, Dict[str, List[str]]]]) -> List[str]:
+def group_out_functions(function_calls: Dict[str, Dict[str, Dict[str, List[str]]]]) -> Tuple[Dict[str, List[str]], List[str]]:
     """
-    Prompts the user to create named groups by reviewing all detected function names.
+    Groups detected function names by common prefixes and identifies single (ungrouped) functions.
 
     :param function_calls: Dictionary with C file paths mapping to function call data.
-    :return: List of group keywords provided by the user.
+    :return: Tuple of (grouped functions dictionary, list of single functions).
     """
-    all_functions = []
-    for file, calls in function_calls.items():
-        for call, locations in sorted(calls.items()):
+    all_functions = set()
+
+    # Collect all unique function names (stripping arguments)
+    for file_calls in function_calls.values():
+        for call in file_calls:
             func = call.split("(", 1)[0]
-            if func not in all_functions:
-                all_functions.append(func)
+            all_functions.add(func)
 
-    print("\nDetected functions:")
-    for func in sorted(all_functions):
-        print(func)
+    all_functions = sorted(all_functions)
 
-    groups = []
+    # # Debug print, comment in if needed
+    # print("\nDetected functions:")
+    # for func in all_functions:
+    #     print(func)
+
+    # Step 1: Find 2-word prefixes that apply to 2+ functions
     prefix_counts = defaultdict(list)
-
     for func in all_functions:
         words = func.split("_")
         if len(words) >= 2:
             prefix = "_".join(words[:2])
             prefix_counts[prefix].append(func)
 
-    suggested = set()
-    for prefix, funcs in prefix_counts.items():
-        if len(funcs) >= 2:
-            suggested.add(prefix)
+    groups = {prefix: funcs for prefix, funcs in prefix_counts.items() if len(funcs) >= 2}
+    single_functions = [func for func in all_functions if not any(func.startswith(group) for group in groups)]
 
-    print("\nSuggested groups based on function name prefixes:")
-    for group in sorted(suggested):
-        print(group)
-
-    user_decision = input("Are these group suggestions okay? (Press 'n' or 'no' to modify): ").strip().lower()
-    if user_decision in ['n', 'no']:
-        user_input = input("Which suggested groups to keep? (space-separated): ").strip()
-        keep_groups = set(user_input.split())
-        groups.extend([g for g in suggested if g in keep_groups])
-    else:
-        groups.extend(suggested)
-
-    while True:
-
-        # Show currently collected groups.
-        print(f"\nCurrent groups: {groups}\n")
-        print(f"Left 'single' functions:")
-        for func in sorted(all_functions):
-            if not any(func.startswith(group) for group in groups):
-                print(func)
-
-        # Ask the user to input group keywords separated by spaces.
-        user_input = input("\nEnter group keywords (space-separated) if you have more: ").strip()
-        if user_input:
-            groups.extend(user_input.split())
-
-        more = input("More groups? (yes/y or no/n): ").strip().lower()
-
-        # Handle control flow based on user response.
-        if more in ["no", "n"]:
-            break
-        elif more not in ["yes", "y"] and more:
-            groups.extend(more.split())
-
-    return groups
+    return groups, single_functions
 
 def group_function_calls_by_keyword(function_calls: Dict[str, Dict[str, Dict[str, List[str]]]], groups: List[str]) -> Dict[str, List[str]]:
     """
@@ -325,16 +292,53 @@ def group_function_calls_by_keyword(function_calls: Dict[str, Dict[str, Dict[str
 
     return grouped_calls
 
+def extract_declarations_for_known_calls(
+    grouped_functions: Dict[str, List[str]],
+    single_funcs: List[str],
+    layer: str
+) -> Tuple[Dict[str, Dict[str, List[str]]], Dict[str, List[str]]]:
+    """
+    Searches all .h files under the current directory (recursively) to locate valid **function declarations**
+    and macro defines for a given list of known function or macro names. These declarations are then annotated
+    with the file path and line number where they were found.
 
-def extract_declarations_for_known_calls(function_calls: Dict[str, Dict[str, Dict[str, List[str]]]], grouped_functions: Dict[str, List[str]], layer: str) -> Dict[str, Dict[str, Dict[str, List[str]]]]:
-    updated_calls = function_calls.copy()
-    all_called_functions = set()
-    for funcs in grouped_functions.values():
-        all_called_functions.update([fn.split("(")[0] for fn in funcs])
+    Only proper C-style function declarations (i.e., `return_type name(params);`) are matched—
+    inline definitions, macros, typedefs, or comments are ignored. In addition, uppercase-named macros
+    are matched using the `#define NAME` pattern.
 
+    Parameters:
+        grouped_functions: Dictionary mapping group labels to lists of related function names or macros.
+        single_funcs: List of function or macro names that are not part of any group.
+        layer: Layer name for context (not currently used in logic).
+
+    Returns:
+        A tuple containing:
+        - A dictionary like grouped_functions, but with each name mapping to a list of
+          declaration locations (file path + line number), or ["No declaration found"] if not found.
+        - A dictionary where each single function or macro maps to a list of declaration locations,
+          or ["No declaration found"] if none were found.
+    """
+
+    # Combine all target names into a single set for quick lookup
+    all_known_functions = set(f for funcs in grouped_functions.values() for f in funcs)
+    all_known_functions.update(single_funcs)
+
+    # Prepare results structure: one for grouped, one for single
+    updated_grouped = {group: {fn: [] for fn in funcs} for group, funcs in grouped_functions.items()}
+    single_func_decls = {fn: [] for fn in single_funcs}
+
+    # Skip lines with these to avoid inline, typedefs, etc.
     disallowed_keywords = {"typedef", "inline"}
 
+    # Match classic C declarations: return_type name(params);
+    declaration_pattern = re.compile(r"^[\w\s\*]+\b([a-zA-Z_][\w]*)\s*\(([^;]*?)\)\s*;")
+
+    # Match macro definitions: #define MACRO_NAME
+    macro_pattern = re.compile(r"^#\s*define\s+([A-Z_][A-Z0-9_]*)\b")
+
     for dirpath, _, filenames in os.walk("."):
+
+        # Skip test/mocked folders
         if any(skip in dirpath for skip in ["mock", "test", "sample", "classic", "shell"]):
             continue
 
@@ -347,7 +351,7 @@ def extract_declarations_for_known_calls(function_calls: Dict[str, Dict[str, Dic
                 with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                     lines = f.readlines()
             except Exception:
-                continue
+                continue  # skip unreadable files
 
             in_comment_block = False
             buffer = ""
@@ -355,44 +359,75 @@ def extract_declarations_for_known_calls(function_calls: Dict[str, Dict[str, Dic
             for i, line in enumerate(lines):
                 stripped = line.strip()
 
+                # Handle multi-line comments
                 if '/*' in stripped:
                     in_comment_block = True
                 if '*/' in stripped:
                     in_comment_block = False
                     continue
-                if in_comment_block or stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):
+
+                # Skip irrelevant lines
+                if in_comment_block or stripped.startswith(('//', '*')):
                     continue
+
+                # Match uppercase macro definitions
+                macro_match = macro_pattern.match(stripped)
+                if macro_match:
+                    macro_name = macro_match.group(1)
+                    if macro_name in all_known_functions:
+                        location = f"{filepath}:{i+1}"
+                        for group, funcs in grouped_functions.items():
+                            if macro_name in funcs:
+                                updated_grouped[group][macro_name].append(location)
+                        if macro_name in single_func_decls:
+                            single_func_decls[macro_name].append(location)
+                    continue  # don't treat as function declaration
+
+                # Skip disallowed keywords
                 if any(kw in stripped for kw in disallowed_keywords):
                     continue
-                if stripped.startswith("typedef"):
-                    continue
 
+                # Accumulate lines for multi-line declaration
                 buffer += stripped + " "
-
-                if ");" not in stripped:
+                if ";" not in stripped:
                     continue
 
-                matches = re.findall(r"([a-zA-Z_][\w]*)\s*\(([^)]*)\)\s*;", buffer)
+                # Try function declaration match
+                match = declaration_pattern.match(buffer.strip())
                 buffer = ""
-                for fn_name, params in matches:
-                    if fn_name not in all_called_functions:
-                        continue
 
-                    simplified_params = []
-                    for p in params.split(','):
-                        p = p.strip()
-                        last_token = re.split(r"[.->]", p)[-1] if p else ""
-                        simplified_params.append(last_token)
+                if not match:
+                    continue
 
-                    normalized_sig = f"{fn_name}({', '.join(simplified_params)})"
-                    loc = f"{filepath}:{i+1}"
+                fn_name, params = match.groups()
 
-                    if filepath not in updated_calls:
-                        updated_calls[filepath] = {}
-                    if "function_declarations" not in updated_calls[filepath]:
-                        updated_calls[filepath]["function_declarations"] = {}
-                    if normalized_sig not in updated_calls[filepath]["function_declarations"]:
-                        updated_calls[filepath]["function_declarations"][normalized_sig] = []
-                    updated_calls[filepath]["function_declarations"][normalized_sig].append(loc)
+                if fn_name not in all_known_functions:
+                    continue
 
-    return updated_calls
+                simplified_params = []
+                for p in params.split(','):
+                    p = p.strip()
+                    last_token = re.split(r"[.->]", p)[-1] if p else ""
+                    simplified_params.append(last_token)
+
+                normalized_sig = f"{fn_name}({', '.join(simplified_params)})"
+                location = f"{filepath}:{i+1}"
+
+                for group, funcs in grouped_functions.items():
+                    if fn_name in funcs:
+                        updated_grouped[group][fn_name].append(location)
+
+                if fn_name in single_func_decls:
+                    single_func_decls[fn_name].append(location)
+
+    # Ensure fallback message for anything unfound
+    for group, funcs in updated_grouped.items():
+        for fn_name in funcs:
+            if not updated_grouped[group][fn_name]:
+                updated_grouped[group][fn_name] = ["No declaration found in any header."]
+
+    for fn_name in single_func_decls:
+        if not single_func_decls[fn_name]:
+            single_func_decls[fn_name] = ["No declaration found in any header."]
+
+    return updated_grouped, single_func_decls
