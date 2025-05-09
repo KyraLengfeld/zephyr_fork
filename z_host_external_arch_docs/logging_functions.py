@@ -223,28 +223,37 @@ def write_in_info(all_groups, output_path):
                 f.write("\n")  # space between functions
             f.write("\n" + "="*60 + "\n\n")  # separator between groups
 
-def write_output_to_file(function_calls: Dict[str, Dict[str, Dict[str, List[str]]]], output_file: str) -> None:
-    with open(output_file, 'w') as f:
-        for file, data in function_calls.items():
-            f.write(f"File: {file}\n")
-            if "function_declarations" in data:
-                for func, locations in data["function_declarations"].items():
-                    f.write(f"  {func} (declared):\n")
-                    for loc in locations:
-                        f.write(f"    - {loc}\n")
-            if "function_calls" in data:
-                for func, locations in data["function_calls"].items():
-                    f.write(f"  {func} (called):\n")
-                    for loc in locations:
-                        f.write(f"    - {loc}\n")
-            f.write("\n")
+def write_output_to_file(function_calls, filepath, layer):
+    layer_upper = layer.upper()
 
-def write_caller_group_params_to_file(caller_group_params, filepath, layer):
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"## Which resources and callbacks leave the {layer_upper} module and to where.\n")
+        for group in sorted(function_calls):
+            # Upper-case the first word of the group
+            parts = group.split()
+            if parts:
+                group_upper = parts[0].upper() + " " + " ".join(parts[1:])
+            else:
+                group_upper = group
+            # f.write(f"File: {file}\n")
+            # if "function_declarations" in data:
+            #     for func, locations in data["function_declarations"].items():
+            #         f.write(f"  {func} (declared):\n")
+            #         for loc in locations:
+            #             f.write(f"    - {loc}\n")
+            # if "function_calls" in data:
+            #     for func, locations in data["function_calls"].items():
+            #         f.write(f"  {func} (called):\n")
+            #         for loc in locations:
+            #             f.write(f"    - {loc}\n")
+            # f.write("\n")
+
+def write_caller_group_params_to_file(grouped_funcs, single_funcs, filepath, layer):
     layer_upper = layer.upper()
 
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(f"## Which resources and callbacks enter the {layer_upper} module and to where.\n")
-        for group in sorted(caller_group_params):
+        for group in sorted(grouped_funcs):
             # Upper-case the first word of the group
             parts = group.split()
             if parts:
@@ -258,7 +267,7 @@ def write_caller_group_params_to_file(caller_group_params, filepath, layer):
 
             lines = []
 
-            for clean_param, info in caller_group_params[group].items():
+            for clean_param, info in grouped_funcs[group].items():
                 group_list = sorted(info["groups"])
                 group_str = ", ".join(group_list)
                 lines.append((clean_param, group_str, info.get("description", "None"), info.get("def_location", "")))
@@ -267,3 +276,9 @@ def write_caller_group_params_to_file(caller_group_params, filepath, layer):
                 f.write(f"|{clean_param}|{group_str}|{desc}|{def_loc}|\n")
 
             f.write("\n")
+
+        for func in single_funcs:
+
+            f.write("### Ungrouped functions\n\n")
+            f.write(f"|Parameter|{layer_upper} group|Description|Defined at|\n")
+            f.write(f"|---------|-------------|-----------|----------|\n")

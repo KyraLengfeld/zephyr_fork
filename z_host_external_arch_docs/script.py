@@ -17,7 +17,7 @@ from out_functions import (
     find_c_files,
     filter_files_with_function_definitions,
     extract_function_calls,
-    get_function_groups_from_user,
+    group_out_functions,
     group_function_calls_by_keyword,
     extract_declarations_for_known_calls
 )
@@ -48,6 +48,8 @@ def main():
         all_groups.update(groups_info)
 
     # ### IN ###
+    # print("--------------------IN--------------------")
+
     # # # Debug write all the infocollected from header_list to file, comment-in if needed
     # # all_groups_file = f"all_groups_{layer}.txt"
     # # with open(all_groups_file, "w", encoding="utf-8") as file:
@@ -90,6 +92,7 @@ def main():
     ####### Try with CONN, there might be MAAANY c-files, because of the different function names, so make it user interactible.
     ########## Need to fix these!
     ### OUT ###
+    print("--------------------OUT--------------------")
     # Extract common folders
     common_folders = extract_common_folders(header_list)
     # print(common_folders) # Debug print, comment-in if needed
@@ -134,17 +137,26 @@ def main():
     #             print(f"    - {loc}")
 
     # Prompt user to group function calls based on keywords
-    groups = get_function_groups_from_user(function_calls) # I can return all functions (stripped of parameters, should I for the next step?)
+    grouped, single_funcs = group_out_functions(function_calls)
     # # Debug print, comment-in if needed
-    # print("Your groups:")
-    # for group in groups:
-    #     print(group)
+    # print("\ngrouped functions:\n")
+    # for group, funcs in grouped.items():
+    #     print(f"{group}:")
+    #     for func in funcs:
+    #         print(f"  - {func}")
+    # print("\nsingles:\n")
+    # for single in single_funcs:
+    #     print(single)
 
-    # # Group function calls using the user-defined keywords
-    # grouped = group_function_calls_by_keyword(function_calls, groups)
-
-    # # Extract declarations for calls we now have groups for
-    # calls_with_decls = extract_declarations_for_known_calls(function_calls, grouped, layer)
+    group_calls, ungrouped_calls = extract_declarations_for_known_calls(grouped, single_funcs, layer)
+    out_grouped_file = f"OUT_grouped_{layer}.txt"
+    # write_output_to_file(calls_with_decls, out_grouped_file, layer)
+    with open(out_grouped_file, "w", encoding="utf-8") as file:
+        json.dump(group_calls, file, indent=4)
+    out_func_calls_file = f"OUT_func_calls_{layer}.txt"
+    # write_output_to_file(calls_with_decls, out_grouped_file, layer)
+    with open(out_func_calls_file, "w", encoding="utf-8") as file:
+        json.dump(ungrouped_calls, file, indent=4)
 
     # # Debug print, comment-in if needed
     # for file, data in calls_with_decls.items():
@@ -162,8 +174,11 @@ def main():
     #             for loc in locations:
     #                 print(f"      - {loc}")
 
-    # # Write all function call analysis to output file
-    # write_output_to_file(calls_with_decls, "out_calls.txt")
+    # Write all function call analysis to output file
+    out_grouped_params_file = f"OUT_grouped_{layer}_params.txt"
+    write_output_to_file(grouped, single_funcs, out_grouped_params_file, layer)
+    # with open(out_grouped_params_file, "w", encoding="utf-8") as file:
+    #     json.dump(calls_with_decls, file, indent=4)
 
 
 # Run the script if executed directly
