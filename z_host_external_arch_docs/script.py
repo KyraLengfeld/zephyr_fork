@@ -148,15 +148,20 @@ def main():
     # for single in single_funcs:
     #     print(single)
 
-    group_calls, ungrouped_calls = extract_declarations_for_known_calls(grouped, single_funcs, layer)
+    group_calls = extract_declarations_for_known_calls(grouped, single_funcs, layer)
     out_grouped_file = f"OUT_grouped_{layer}.txt"
     # write_output_to_file(calls_with_decls, out_grouped_file, layer)
     with open(out_grouped_file, "w", encoding="utf-8") as file:
         json.dump(group_calls, file, indent=4)
-    out_func_calls_file = f"OUT_func_calls_{layer}.txt"
-    # write_output_to_file(calls_with_decls, out_grouped_file, layer)
-    with open(out_func_calls_file, "w", encoding="utf-8") as file:
-        json.dump(ungrouped_calls, file, indent=4)
+    # # out_func_calls_file = f"OUT_func_calls_{layer}.txt"
+    # # # write_output_to_file(calls_with_decls, out_grouped_file, layer)
+    # # with open(out_func_calls_file, "w", encoding="utf-8") as file:
+    # #     json.dump(ungrouped_calls, file, indent=4)
+
+    # grouped_out_params = add_param_def_info(group_calls, ungrouped_calls, layer)
+    # out_grouped_params_file = f"OUT_grouped_{layer}_params.txt"
+    # with open(out_grouped_params_file, "w", encoding="utf-8") as file:
+    #     json.dump(grouped_out_params, file, indent=4)
 
     # # Debug print, comment-in if needed
     # for file, data in calls_with_decls.items():
@@ -175,8 +180,8 @@ def main():
     #                 print(f"      - {loc}")
 
     # Write all function call analysis to output file
-    out_grouped_params_file = f"OUT_grouped_{layer}_params.txt"
-    write_output_to_file(grouped, single_funcs, out_grouped_params_file, layer)
+    # out_grouped_params_file = f"OUT_grouped_{layer}_params.txt"
+    # write_output_to_file(grouped, single_funcs, out_grouped_params_file, layer)
     # with open(out_grouped_params_file, "w", encoding="utf-8") as file:
     #     json.dump(calls_with_decls, file, indent=4)
 

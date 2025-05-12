@@ -1,7 +1,7 @@
 import os
 import re
 import subprocess
-from general import STANDARD_C_TYPES
+from general import STANDARD_C_TYPES, is_standard_c_type, find_header_files, extract_comment_above
 
 def find_function_calls(directory, patterns, ignore_paths):
     """
@@ -239,80 +239,6 @@ def extract_caller_groups(all_groups):
                         }
 
     return caller_groups, caller_group_params
-
-def is_standard_c_type(param_str):
-    """
-    Determines if a given parameter string is a standard C type.
-
-    Parameters:
-    - param_str (str): The type string to check.
-
-    Returns:
-    - bool: True if it's a standard type, False otherwise.
-    """
-    tokens = re.split(r"[ *]+", param_str.replace("const", "").strip())
-    return any(t in STANDARD_C_TYPES for t in tokens if t)
-
-def find_header_files(base_dir, subdir):
-    """
-    Recursively finds .h files under a given subdirectory.
-
-    Parameters:
-    - base_dir (str): Base project directory.
-    - subdir (str): Subdirectory to scan.
-
-    Returns:
-    - list of str: Paths to .h files found.
-    """
-    matching_headers = []
-    for root, _, files in os.walk(os.path.join(base_dir, subdir)):
-        if "test" in root or "mock" in root:
-            continue
-        for file in files:
-            if file.endswith(".h"):
-                matching_headers.append(os.path.join(root, file))
-    return matching_headers
-
-def extract_comment_above(lines, def_index):
-    """
-    Extracts description in comment above a line index in a source file.
-
-    Parameters:
-    - lines (list of str): File lines.
-    - def_index (int): Index of definition line.
-
-    Returns:
-    - str: Extracted comment or None.
-    """
-    i = def_index - 1
-    cleaned_line = "None available."
-
-    while i >= 0:
-        brief_found = False
-        line = lines[i].strip()
-
-        if line == "":
-            i -= 1
-            continue
-
-        # Go to beginning of the comment block
-        while i >= 0 and "/*" in line:
-            if "@brief" in line:
-                brief_found = True
-                cleaned_line = re.sub(r'(/\*\*?|(\*/)|@brief)', '', line).strip()
-                break
-            i -= 1
-            if i >= 0:
-                line = lines[i].strip()
-            else:
-                break
-
-        if ";" in line or "{" in line or "}" in line or brief_found:
-            break
-
-        i -= 1
-
-    return cleaned_line
 
 def is_standard_c_type(clean_param):
     tokens = re.sub(r'[,*()]', '', clean_param).split()

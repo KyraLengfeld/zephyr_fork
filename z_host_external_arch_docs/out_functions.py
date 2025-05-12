@@ -2,6 +2,7 @@ import os
 import re
 from typing import List, Dict, Tuple
 from collections import defaultdict, Counter
+from general import STANDARD_C_TYPES, is_standard_c_type, find_header_files, extract_comment_above
 
 def extract_function_calls(target_function, lookup_table):
     """
@@ -292,142 +293,235 @@ def group_function_calls_by_keyword(function_calls: Dict[str, Dict[str, Dict[str
 
     return grouped_calls
 
-def extract_declarations_for_known_calls(
-    grouped_functions: Dict[str, List[str]],
-    single_funcs: List[str],
-    layer: str
-) -> Tuple[Dict[str, Dict[str, List[str]]], Dict[str, List[str]]]:
-    """
-    Searches all .h files under the current directory (recursively) to locate valid **function declarations**
-    and macro defines for a given list of known function or macro names. These declarations are then annotated
-    with the file path and line number where they were found.
 
-    Only proper C-style function declarations (i.e., `return_type name(params);`) are matched—
-    inline definitions, macros, typedefs, or comments are ignored. In addition, uppercase-named macros
-    are matched using the `#define NAME` pattern.
+def extract_declarations_for_known_calls(grouped_functions, single_funcs, layer):
+    """
+    Searches all .h files under the current directory (recursively),
+    as well as specific important headers, to locate valid **function declarations**
+    and macro defines for a given list of known function or macro names.
+
+    Recognizes:
+    - C-style function declarations and inline definitions (including static inline)
+    - Macro defines (uppercase, snake_case style)
+    - Special case lowercase defines (e.g., k_fifo_get) from specific known headers
 
     Parameters:
-        grouped_functions: Dictionary mapping group labels to lists of related function names or macros.
-        single_funcs: List of function or macro names that are not part of any group.
-        layer: Layer name for context (not currently used in logic).
+        grouped_functions: Dictionary mapping group labels to lists of function/macro names.
+        single_funcs: List of function/macro names that are not grouped.
+        layer: Layer name for context (not used in logic).
 
     Returns:
-        A tuple containing:
-        - A dictionary like grouped_functions, but with each name mapping to a list of
-          declaration locations (file path + line number), or ["No declaration found"] if not found.
-        - A dictionary where each single function or macro maps to a list of declaration locations,
-          or ["No declaration found"] if none were found.
+        A dictionary like grouped_functions, with each name mapping to a list of
+        declaration locations (file path + line number), or ["No declaration found"] if not found.
+        Also includes an additional group called "Ungrouped functions" for the single_funcs.
     """
 
-    # Combine all target names into a single set for quick lookup
-    all_known_functions = set(f for funcs in grouped_functions.values() for f in funcs)
-    all_known_functions.update(single_funcs)
+    # Combine all known function/macro names into a lookup set
+    all_known = set(sum(grouped_functions.values(), [])) | set(single_funcs)
 
-    # Prepare results structure: one for grouped, one for single
+    # Special lowercase macros that should be matched only in kernel.h
+    special_lowercase_macros = "k_fifo"
+
+    # Initialize result containers
     updated_grouped = {group: {fn: [] for fn in funcs} for group, funcs in grouped_functions.items()}
-    single_func_decls = {fn: [] for fn in single_funcs}
+    ungrouped = {fn: [] for fn in single_funcs}
 
-    # Skip lines with these to avoid inline, typedefs, etc.
-    disallowed_keywords = {"typedef", "inline"}
-
-    # Match classic C declarations: return_type name(params);
-    declaration_pattern = re.compile(r"^[\w\s\*]+\b([a-zA-Z_][\w]*)\s*\(([^;]*?)\)\s*;")
-
-    # Match macro definitions: #define MACRO_NAME
+    # Regular expressions for function declarations and macro defines
+    function_pattern = re.compile(r"^[\w\s\*]+\b([a-zA-Z_][\w]*)\s*\(([^)]*)\)\s*[{;]")
     macro_pattern = re.compile(r"^#\s*define\s+([A-Z_][A-Z0-9_]*)\b")
+    special_macro_pattern = re.compile(r"^#\s*define\s+([a-z_][a-z0-9_]*)\s*\(", re.IGNORECASE)
 
+    # Gather header files to scan
+    header_files = []
     for dirpath, _, filenames in os.walk("."):
-
-        # Skip test/mocked folders
         if any(skip in dirpath for skip in ["mock", "test", "sample", "classic", "shell"]):
             continue
-
         for file in filenames:
-            if not file.endswith(".h"):
+            if file.endswith(".h"):
+                header_files.append(os.path.join(dirpath, file))
+
+    # Always search these important headers
+    for must_have in ["./zephyr/include/zephyr/kernel.h", "./zephyr/include/zephyr/net_buf.h"]:
+        if must_have not in header_files:
+            header_files.append(must_have)
+
+    # Scan each header file
+    for filepath in header_files:
+        if not os.path.isfile(filepath):
+            continue
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+        except Exception:
+            continue
+
+        buffer = ""
+        in_comment_block = False
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+
+            # Comment skipping logic
+            if '/*' in stripped:
+                in_comment_block = True
+            if '*/' in stripped:
+                in_comment_block = False
+                continue
+            if in_comment_block or stripped.startswith(('//', '*')):
                 continue
 
-            filepath = os.path.join(dirpath, file)
-            try:
-                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                    lines = f.readlines()
-            except Exception:
-                continue  # skip unreadable files
+            # Check for macro define (uppercase)
+            macro_match = macro_pattern.match(stripped)
+            if macro_match:
+                macro_name = macro_match.group(1)
+                if macro_name in all_known:
+                    location = f"{filepath}:{i+1}"
+                    for group, funcs in grouped_functions.items():
+                        if macro_name in funcs:
+                            updated_grouped[group][macro_name].append(location)
+                    if macro_name in ungrouped:
+                        ungrouped[macro_name].append(location)
+                continue
 
-            in_comment_block = False
-            buffer = ""
-
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-
-                # Handle multi-line comments
-                if '/*' in stripped:
-                    in_comment_block = True
-                if '*/' in stripped:
-                    in_comment_block = False
-                    continue
-
-                # Skip irrelevant lines
-                if in_comment_block or stripped.startswith(('//', '*')):
-                    continue
-
-                # Match uppercase macro definitions
-                macro_match = macro_pattern.match(stripped)
-                if macro_match:
-                    macro_name = macro_match.group(1)
-                    if macro_name in all_known_functions:
+            # Check for special lowercase macros only in kernel.h
+            if filepath.endswith("kernel.h"):
+                special_match = special_macro_pattern.match(stripped)
+                if special_match:
+                    macro_name = special_match.group(1)
+                    if special_lowercase_macros in macro_name:
                         location = f"{filepath}:{i+1}"
                         for group, funcs in grouped_functions.items():
                             if macro_name in funcs:
                                 updated_grouped[group][macro_name].append(location)
-                        if macro_name in single_func_decls:
-                            single_func_decls[macro_name].append(location)
-                    continue  # don't treat as function declaration
+                        if macro_name in ungrouped:
+                            ungrouped[macro_name].append(location)
+                # Do not continue here; may also match function declaration
 
-                # Skip disallowed keywords
-                if any(kw in stripped for kw in disallowed_keywords):
-                    continue
+            # Build multiline buffer for function declarations
+            buffer += stripped + " "
+            if not (stripped.endswith(';') or '{' in stripped):
+                continue
 
-                # Accumulate lines for multi-line declaration
-                buffer += stripped + " "
-                if ";" not in stripped:
-                    continue
+            func_match = function_pattern.match(buffer.strip())
+            buffer = ""
 
-                # Try function declaration match
-                match = declaration_pattern.match(buffer.strip())
-                buffer = ""
+            if not func_match:
+                continue
 
-                if not match:
-                    continue
+            fn_name, params = func_match.groups()
+            if fn_name not in all_known:
+                continue
 
-                fn_name, params = match.groups()
+            location = f"{filepath}:{i+1}"
+            for group, funcs in grouped_functions.items():
+                if fn_name in funcs:
+                    updated_grouped[group][fn_name].append(location)
+            if fn_name in ungrouped:
+                ungrouped[fn_name].append(location)
 
-                if fn_name not in all_known_functions:
-                    continue
+    # Insert fallback for missing declarations
+    for group in updated_grouped:
+        for fn in updated_grouped[group]:
+            if not updated_grouped[group][fn]:
+                updated_grouped[group][fn] = ["No declaration found"]
 
-                simplified_params = []
-                for p in params.split(','):
-                    p = p.strip()
-                    last_token = re.split(r"[.->]", p)[-1] if p else ""
-                    simplified_params.append(last_token)
+    for fn in ungrouped:
+        if not ungrouped[fn]:
+            ungrouped[fn] = ["No declaration found"]
 
-                normalized_sig = f"{fn_name}({', '.join(simplified_params)})"
-                location = f"{filepath}:{i+1}"
+    updated_grouped["Ungrouped functions"] = ungrouped
+    return updated_grouped
 
-                for group, funcs in grouped_functions.items():
-                    if fn_name in funcs:
-                        updated_grouped[group][fn_name].append(location)
+# def add_param_def_info_out(group_calls, ungrouped_calls, layer, base_dir="."):
+#     """
+#     Searches headers for parameter definitions and adds them (and their comments) to the param info.
 
-                if fn_name in single_func_decls:
-                    single_func_decls[fn_name].append(location)
+#     Parameters:
+#     - base_dir (str): Base path for relative formatting.
 
-    # Ensure fallback message for anything unfound
-    for group, funcs in updated_grouped.items():
-        for fn_name in funcs:
-            if not updated_grouped[group][fn_name]:
-                updated_grouped[group][fn_name] = ["No declaration found in any header."]
+#     Returns:
+#     - dict: Enhanced param info with def_location and improved description.
+#     """
+#     print("\nRetrieving parameter definition paths and descriptions.\n")
+#     grouped_params = {}
 
-    for fn_name in single_func_decls:
-        if not single_func_decls[fn_name]:
-            single_func_decls[fn_name] = ["No declaration found in any header."]
+#     for caller_group, params in grouped_params.items():
+#         if caller_group == layer:
+#             continue
+#         # Determine base folder from caller group name
+#         base_key = caller_group.split(" - ")[0]
+#         calling_headers = find_header_files(base_dir, base_key)
 
-    return updated_grouped, single_func_decls
+#         for param_name, info in params.items():
+#             clean_param = param_name
+
+#             # Skip standard C types
+#             if is_standard_c_type(clean_param):
+#                 continue
+
+#             found = False
+#             search_terms = set()
+
+#             # Extract struct or type names from param string
+#             struct_match = re.search(r"(struct\s+\w+)", clean_param)
+#             if struct_match:
+#                 search_terms.add(struct_match.group(1))
+#             else:
+#                 tokens = clean_param.replace("*", "").split()
+#                 for tok in tokens:
+#                     if tok not in STANDARD_C_TYPES and tok not in {"const", "volatile"}:
+#                         search_terms.add(tok)
+
+#             # Search through the usual suspects
+#             zephyr_bt_include_dir = os.path.join(base_dir, "zephyr/include/zephyr/bluetooth")
+#             zephyr_bt_subsys_dir = os.path.join(base_dir, "zephyr/subsys/bluetooth/host")
+
+#             zephyr_bt_headers = []
+#             for root, _, files in os.walk(zephyr_bt_include_dir):
+#                 for file in files:
+#                     if file.endswith(".h"):
+#                         zephyr_bt_headers.append(os.path.join(root, file))
+#             for root, _, files in os.walk(zephyr_bt_subsys_dir):
+#                 for file in files:
+#                     if file.endswith(".h"):
+#                         zephyr_bt_headers.append(os.path.join(root, file))
+
+#             # Always include these
+#             zephyr_bt_headers.append(os.path.join(base_dir, "zephyr/include/zephyr/kernel.h"))
+#             zephyr_bt_headers.append(os.path.join(base_dir, "zephyr/include/zephyr/net_buf.h"))
+
+#             # Search through all candidate header files
+#             # This is taking WAY too long
+#             ##TODO: remove the "double" ones
+#             for header in header_list:
+#                 try:
+#                     with open(header, "r", encoding="utf-8") as f:
+#                         lines = f.readlines()
+
+#                     for idx, line in enumerate(lines):
+#                         for term in search_terms:
+#                             if re.search(rf"\b{re.escape(term)}\b.*[{{;]", line):
+#                             # # # # if re.search(rf"\bstruct\b.*\b{re.escape(term)}\b.*\{{", line):
+#                                 comment = extract_comment_above(lines, idx)
+#                                 info["def_location"] = f"{os.path.relpath(header, base_dir)}:{idx + 1}"
+
+#                                 # Add comment only if relevant
+#                                 if comment:
+#                                     if "None" in info["description"]:
+#                                         info["description"] = comment
+#                                     else:
+#                                         info["description"] += f" | {comment}"
+#                                 else:
+#                                     if not info["description"]:
+#                                         info["description"] = "None available"
+#                                 found = True
+#                                 break
+#                         if found:
+#                             break
+#                 except Exception:
+#                     continue
+
+#             if not found:
+#                 info["def_location"] = "Not found."
+
+#     return grouped_params
