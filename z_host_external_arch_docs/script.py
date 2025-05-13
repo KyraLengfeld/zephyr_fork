@@ -120,14 +120,14 @@ def main():
     function_calls = extract_function_calls(matched_files, layer)
 
     # Write OUT scan results to a file
-    output_file = f"OUT_{layer}.txt"
-    with open(output_file, "w", encoding="utf-8") as f:
-        for file, calls in function_calls.items():
-            f.write(f"\nFile: {file}\n")
-            for call, locations in sorted(calls.items()):
-                f.write(f"  {call}:\n")
-                for loc in sorted(locations):
-                    f.write(f"    - {loc}\n")
+    # # output_file = f"OUT_{layer}.txt"
+    # # with open(output_file, "w", encoding="utf-8") as f:
+    # #     for file, calls in function_calls.items():
+    # #         f.write(f"\nFile: {file}\n")
+    # #         for call, locations in sorted(calls.items()):
+    # #             f.write(f"  {call}:\n")
+    # #             for loc in sorted(locations):
+    # #                 f.write(f"    - {loc}\n")
     # # Debug print, comment-in if needed
     # for file, calls in function_calls.items():
     #     print(f"\nFile: {file}")
@@ -147,6 +147,10 @@ def main():
     # print("\nsingles:\n")
     # for single in single_funcs:
     #     print(single)
+    out_file = f"OUT_{layer}.txt"
+    # write_output_to_file(calls_with_decls, out_grouped_file, layer)
+    with open(out_file, "w", encoding="utf-8") as file:
+        json.dump(grouped, file, indent=4)
 
     group_calls = extract_declarations_for_known_calls(grouped, single_funcs, layer)
     out_grouped_file = f"OUT_grouped_{layer}.txt"
