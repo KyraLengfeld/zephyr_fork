@@ -294,6 +294,139 @@ def group_function_calls_by_keyword(function_calls: Dict[str, Dict[str, Dict[str
     return grouped_calls
 
 
+def gather_header_files():
+    """
+    Recursively walks through the current directory to collect all .h files,
+    excluding any paths that contain mock, test, sample, classic, or shell.
+
+    Also appends specific required headers if not already included:
+    - ./zephyr/include/zephyr/kernel.h
+    - ./zephyr/include/zephyr/net_buf.h
+
+    Returns:
+        List of header file paths to be scanned.
+    """
+    header_files = []
+    for dirpath, _, filenames in os.walk("."):
+        if any(skip in dirpath for skip in ["mock", "test", "sample", "classic", "shell"]):
+            continue
+        for file in filenames:
+            if file.endswith(".h"):
+                header_files.append(os.path.join(dirpath, file))
+
+    for must_have in ["./zephyr/include/zephyr/kernel.h", "./zephyr/include/zephyr/net_buf.h"]:
+        if must_have not in header_files:
+            header_files.append(must_have)
+
+    return header_files
+
+def update_result_containers(result_dict, ungrouped_dict, grouped_functions, name, location):
+    """
+    Inserts a matched function or macro name with its declaration location into the results.
+
+    Parameters:
+        result_dict: Dictionary of grouped function results to update.
+        ungrouped_dict: Dictionary of ungrouped function results to update.
+        grouped_functions: Original mapping of group names to lists of known names.
+        name: The matched function or macro name.
+        location: The location string (file path + line number) to store.
+    """
+    for group, funcs in grouped_functions.items():
+        if name in funcs and location not in result_dict[group][name]:
+            result_dict[group][name].append(location)
+    if name in ungrouped_dict and location not in ungrouped_dict[name]:
+        ungrouped_dict[name].append(location)
+
+def process_lines(filepath, lines, all_known, special_lowercase_macros, grouped_functions,
+                  updated_grouped, ungrouped, function_pattern, macro_pattern, special_macro_pattern):
+    """
+    Parses lines of a single header file to detect function declarations, macro defines,
+    and special-case lowercase macros.
+
+    Handles:
+    - Inline and regular function declarations or definitions
+    - Macro definitions (UPPERCASE and special lowercase)
+    - Tracks buffer to support multi-line declarations
+
+    Parameters:
+        filepath: Full path to the current header file.
+        lines: List of lines read from the file.
+        all_known: Set of all function/macro names to detect.
+        special_lowercase_macros: String prefix for lowercase macros from kernel.h.
+        grouped_functions: Group mapping from user input.
+        updated_grouped: Accumulator for found grouped results.
+        ungrouped: Accumulator for found ungrouped results.
+        function_pattern: Compiled regex for function declarations.
+        macro_pattern: Compiled regex for macro defines.
+        special_macro_pattern: Regex for special macros (like k_fifo_get).
+    """
+    buffer = ""
+    in_comment_block = False
+    pending_start_line = 0
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        if '/*' in stripped:
+            in_comment_block = True
+        if '*/' in stripped:
+            in_comment_block = False
+            continue
+        if in_comment_block or stripped.startswith(('//', '*')):
+            continue
+
+        # Handle macro defines
+        macro_match = macro_pattern.match(stripped)
+        if macro_match:
+            macro_name = macro_match.group(1)
+            if macro_name in all_known:
+                location = f"{filepath}:{i+1}"
+                update_result_containers(updated_grouped, ungrouped, grouped_functions, macro_name, location)
+            continue
+
+        # Handle special macros in kernel.h
+        if filepath.endswith("kernel.h"):
+            special_match = special_macro_pattern.match(stripped)
+            if special_match:
+                macro_name = special_match.group(1)
+                if special_lowercase_macros in macro_name:
+                    location = f"{filepath}:{i+1}"
+                    update_result_containers(updated_grouped, ungrouped, grouped_functions, macro_name, location)
+
+        # Accumulate lines for multi-line function declarations/definitions
+        if not buffer:
+            pending_start_line = i
+        buffer += line
+
+        # If function ends here
+        if ';' in stripped or '{' in stripped:
+            func_match = function_pattern.match(buffer.strip())
+            if func_match:
+                fn_name, _ = func_match.groups()
+                if fn_name in all_known:
+                    location = f"{filepath}:{pending_start_line+1}"
+                    update_result_containers(updated_grouped, ungrouped, grouped_functions, fn_name, location)
+            buffer = ""
+
+def finalize_results(updated_grouped, ungrouped):
+    """
+    Ensures every function or macro name has at least one result entry.
+
+    Adds "No declaration found" if no matches were recorded.
+
+    Parameters:
+        updated_grouped: Dictionary of grouped result matches to finalize.
+        ungrouped: Dictionary of ungrouped result matches to finalize.
+    """
+    for group in updated_grouped:
+        for fn in updated_grouped[group]:
+            if not updated_grouped[group][fn]:
+                updated_grouped[group][fn] = ["No declaration found"]
+
+    for fn in ungrouped:
+        if not ungrouped[fn]:
+            ungrouped[fn] = ["No declaration found"]
+
 def extract_declarations_for_known_calls(grouped_functions, single_funcs, layer):
     """
     Searches all .h files under the current directory (recursively),
@@ -315,37 +448,19 @@ def extract_declarations_for_known_calls(grouped_functions, single_funcs, layer)
         declaration locations (file path + line number), or ["No declaration found"] if not found.
         Also includes an additional group called "Ungrouped functions" for the single_funcs.
     """
-
-    # Combine all known function/macro names into a lookup set
     all_known = set(sum(grouped_functions.values(), [])) | set(single_funcs)
-
-    # Special lowercase macros that should be matched only in kernel.h
     special_lowercase_macros = "k_fifo"
-
-    # Initialize result containers
     updated_grouped = {group: {fn: [] for fn in funcs} for group, funcs in grouped_functions.items()}
     ungrouped = {fn: [] for fn in single_funcs}
 
-    # Regular expressions for function declarations and macro defines
-    function_pattern = re.compile(r"^[\w\s\*]+\b([a-zA-Z_][\w]*)\s*\(([^)]*)\)\s*[{;]")
+    function_pattern = re.compile(
+        r"^(?:static\s+)?(?:inline\s+)?[\w\s\*]+\*?\s+([a-zA-Z_][\w]*)\s*\(([^)]*)\)"
+    )
     macro_pattern = re.compile(r"^#\s*define\s+([A-Z_][A-Z0-9_]*)\b")
     special_macro_pattern = re.compile(r"^#\s*define\s+([a-z_][a-z0-9_]*)\s*\(", re.IGNORECASE)
 
-    # Gather header files to scan
-    header_files = []
-    for dirpath, _, filenames in os.walk("."):
-        if any(skip in dirpath for skip in ["mock", "test", "sample", "classic", "shell"]):
-            continue
-        for file in filenames:
-            if file.endswith(".h"):
-                header_files.append(os.path.join(dirpath, file))
+    header_files = gather_header_files()
 
-    # Always search these important headers
-    for must_have in ["./zephyr/include/zephyr/kernel.h", "./zephyr/include/zephyr/net_buf.h"]:
-        if must_have not in header_files:
-            header_files.append(must_have)
-
-    # Scan each header file
     for filepath in header_files:
         if not os.path.isfile(filepath):
             continue
@@ -355,80 +470,10 @@ def extract_declarations_for_known_calls(grouped_functions, single_funcs, layer)
         except Exception:
             continue
 
-        buffer = ""
-        in_comment_block = False
+        process_lines(filepath, lines, all_known, special_lowercase_macros, grouped_functions,
+                      updated_grouped, ungrouped, function_pattern, macro_pattern, special_macro_pattern)
 
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-
-            # Comment skipping logic
-            if '/*' in stripped:
-                in_comment_block = True
-            if '*/' in stripped:
-                in_comment_block = False
-                continue
-            if in_comment_block or stripped.startswith(('//', '*')):
-                continue
-
-            # Check for macro define (uppercase)
-            macro_match = macro_pattern.match(stripped)
-            if macro_match:
-                macro_name = macro_match.group(1)
-                if macro_name in all_known:
-                    location = f"{filepath}:{i+1}"
-                    for group, funcs in grouped_functions.items():
-                        if macro_name in funcs:
-                            updated_grouped[group][macro_name].append(location)
-                    if macro_name in ungrouped:
-                        ungrouped[macro_name].append(location)
-                continue
-
-            # Check for special lowercase macros only in kernel.h
-            if filepath.endswith("kernel.h"):
-                special_match = special_macro_pattern.match(stripped)
-                if special_match:
-                    macro_name = special_match.group(1)
-                    if special_lowercase_macros in macro_name:
-                        location = f"{filepath}:{i+1}"
-                        for group, funcs in grouped_functions.items():
-                            if macro_name in funcs:
-                                updated_grouped[group][macro_name].append(location)
-                        if macro_name in ungrouped:
-                            ungrouped[macro_name].append(location)
-                # Do not continue here; may also match function declaration
-
-            # Build multiline buffer for function declarations
-            buffer += stripped + " "
-            if not (stripped.endswith(';') or '{' in stripped):
-                continue
-
-            func_match = function_pattern.match(buffer.strip())
-            buffer = ""
-
-            if not func_match:
-                continue
-
-            fn_name, params = func_match.groups()
-            if fn_name not in all_known:
-                continue
-
-            location = f"{filepath}:{i+1}"
-            for group, funcs in grouped_functions.items():
-                if fn_name in funcs:
-                    updated_grouped[group][fn_name].append(location)
-            if fn_name in ungrouped:
-                ungrouped[fn_name].append(location)
-
-    # Insert fallback for missing declarations
-    for group in updated_grouped:
-        for fn in updated_grouped[group]:
-            if not updated_grouped[group][fn]:
-                updated_grouped[group][fn] = ["No declaration found"]
-
-    for fn in ungrouped:
-        if not ungrouped[fn]:
-            ungrouped[fn] = ["No declaration found"]
-
+    finalize_results(updated_grouped, ungrouped)
     updated_grouped["Ungrouped functions"] = ungrouped
     return updated_grouped
 
