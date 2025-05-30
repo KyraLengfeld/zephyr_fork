@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from typing import List, Dict, Tuple
@@ -164,6 +165,74 @@ def filter_files_with_function_definitions(c_files: List[str], group_functions: 
             matched_files.append(filepath)
     return matched_files
 
+def detect_function_definition(line, in_macro_block):
+    """
+    Detects if a line contains a function-like definition.
+
+    Supports:
+        - Regular function declarations and definitions
+        - Static/inline/extern/const modifiers
+        - Function-like macros (including multi-line macros with backslashes)
+        - Function pointer declarations
+        - Struct fields with function pointers
+
+    Skips:
+        - Typedefs
+        - Comments
+        - Empty lines
+        - Nested functions
+        - typedef function pointer aliases
+
+    Args:
+        line (str): A single line of code from a C file (assumed stripped).
+        in_macro_block (bool): Whether the parser is currently inside a multi-line macro.
+
+    Returns:
+        tuple: (function_name or None, updated_macro_state)
+    """
+    if not line or line.startswith('//') or line.startswith('*'):
+        return None, in_macro_block
+
+    # Continue multi-line macro if previous line ended with '\'
+    if in_macro_block:
+        if line.endswith('\\'):
+            return None, True  # Still in macro block
+        else:
+            return None, False  # Macro block ends here
+
+    # Skip typedefs
+    if line.startswith('typedef'):
+        return None, False
+
+    # Start of multi-line macro
+    if line.startswith('#define') and line.endswith('\\'):
+        match = re.match(r'#define\s+([A-Z_][A-Z0-9_]*)(\s*\(|\s+)', line)
+        if match:
+            return match.group(1), True
+        return None, True
+
+    # Single-line function-like macro
+    match = re.match(r'#define\s+([A-Z_][A-Z0-9_]*)\s*(\([^)]*\))?', line)
+    if match:
+        return match.group(1), False
+
+    # Struct-style function pointer: void (*func)(int);
+    match = re.match(r'.*\(\s*\*\s*(\w+)\s*\)\s*\([^)]*\)\s*;', line)
+    if match:
+        return match.group(1), False
+
+    # Regular function definition or declaration (with or without modifiers)
+    match = re.match(
+        r'(static\s+|inline\s+|extern\s+|const\s+|unsigned\s+)?'     # optional modifiers
+        r'[a-zA-Z_][\w\s\*]*\s+'                                     # return type
+        r'([a-zA-Z_][\w]*)\s*\([^;]*\)\s*(;|\{)?',                   # function name and args
+        line
+    )
+    if match:
+        return match.group(2), False
+
+    return None, False
+
 def extract_function_calls(c_files: List[str], layer: str) -> Dict[str, Dict[str, List[str]]]:
     """
     Extracts all valid function calls (excluding definitions, macros, control structures, __* prefixed,
@@ -185,11 +254,19 @@ def extract_function_calls(c_files: List[str], layer: str) -> Dict[str, Dict[str
             lines = f.readlines()
 
         in_comment_block = False
+        in_macro_block = False  # Track multi-line macro
+        defined_functions = set()  # Track all function-like definitions
         file_calls = {}
+
 
         for i, line in enumerate(lines):
             raw_line = line
             line = line.strip()
+
+            # Detect function definitions
+            definition, in_macro_block = detect_function_definition(line, in_macro_block)
+            if definition:
+                defined_functions.add(definition)
 
             # Handle comment blocks
             if '/*' in line:
@@ -234,6 +311,16 @@ def extract_function_calls(c_files: List[str], layer: str) -> Dict[str, Dict[str
                 else:
                     file_calls[simplified_call] = [loc]
 
+        # Debug, uncomment if needed
+        out_file = f"{os.path.basename(filepath)}.definitions.txt"
+        with open(out_file, "w", encoding="utf-8") as file:
+            json.dump(sorted(defined_functions), file, indent=4)
+
+        # Filter out calls to locally defined functions/macros
+        file_calls = {
+            k: v for k, v in file_calls.items()
+            if not any(k.startswith(f"{fn}(") for fn in defined_functions)
+        }
         calls_per_file[filepath] = file_calls
     return calls_per_file
 
@@ -292,7 +379,6 @@ def group_function_calls_by_keyword(function_calls: Dict[str, Dict[str, Dict[str
                         grouped_calls[group].append(func_name)
 
     return grouped_calls
-
 
 def gather_header_files():
     """

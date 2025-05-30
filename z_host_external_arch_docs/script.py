@@ -136,7 +136,7 @@ def main():
     #         for loc in sorted(locations):
     #             print(f"    - {loc}")
 
-    # Prompt user to group function calls based on keywords
+    # group funcs
     grouped, single_funcs = group_out_functions(function_calls)
     # # Debug print, comment-in if needed
     # print("\ngrouped functions:\n")
