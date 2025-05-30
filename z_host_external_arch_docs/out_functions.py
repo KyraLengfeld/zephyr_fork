@@ -165,6 +165,36 @@ def filter_files_with_function_definitions(c_files: List[str], group_functions: 
             matched_files.append(filepath)
     return matched_files
 
+def detect_include_header(line):
+    """
+    Detects #include statements and extracts the header file path.
+
+    Supports:
+        - #include "header.h"
+        - #include <header.h>
+
+    Ignores:
+        - Comments
+        - Non-#include lines
+        - Duplicates should be filtered externally
+
+    Args:
+        line (str): A stripped line from the C file.
+
+    Returns:
+        str or None: The included header path (e.g., "my_header.h" or "stdio.h"), or None if not an include line.
+    """
+    # Skip comment-only lines
+    if not line or line.startswith('//') or line.startswith('*'):
+        return None
+
+    # Match #include "something.h" or <something.h>
+    match = re.match(r'#\s*include\s*["<]([^">]+)[">]', line)
+    if match:
+        return match.group(1)
+
+    return None
+
 def detect_function_definition(line, in_macro_block):
     """
     Detects if a line contains a function-like definition.
@@ -256,12 +286,17 @@ def extract_function_calls(c_files: List[str], layer: str) -> Dict[str, Dict[str
         in_comment_block = False
         in_macro_block = False  # Track multi-line macro
         defined_functions = set()  # Track all function-like definitions
+        include_headers = []
         file_calls = {}
 
 
         for i, line in enumerate(lines):
             raw_line = line
             line = line.strip()
+            # Detect #include headers
+            header = detect_include_header(line)
+            if header and header not in include_headers:
+                include_headers.append(header)
 
             # Detect function definitions
             definition, in_macro_block = detect_function_definition(line, in_macro_block)
@@ -312,9 +347,13 @@ def extract_function_calls(c_files: List[str], layer: str) -> Dict[str, Dict[str
                     file_calls[simplified_call] = [loc]
 
         # Debug, uncomment if needed
-        out_file = f"{os.path.basename(filepath)}.definitions.txt"
+        out_file = f"{os.path.basename(filepath)}.includes.txt"
         with open(out_file, "w", encoding="utf-8") as file:
-            json.dump(sorted(defined_functions), file, indent=4)
+            json.dump(include_headers, file, indent=4)
+        # # Debug, uncomment if needed
+        # out_file = f"{os.path.basename(filepath)}.definitions.txt"
+        # with open(out_file, "w", encoding="utf-8") as file:
+        #     json.dump(sorted(defined_functions), file, indent=4)
 
         # Filter out calls to locally defined functions/macros
         file_calls = {
@@ -322,7 +361,88 @@ def extract_function_calls(c_files: List[str], layer: str) -> Dict[str, Dict[str
             if not any(k.startswith(f"{fn}(") for fn in defined_functions)
         }
         calls_per_file[filepath] = file_calls
-    return calls_per_file
+    return calls_per_file, include_headers
+
+def resolve_include_paths(include_headers, c_files):
+    """
+    Resolves actual file paths for headers found in #include statements.
+
+    Searches directories in this specific order:
+        1. All parent directories of the provided C files
+        2. ./zephyr
+        3. ./nrf
+        4. Full recursive walk from current directory
+
+    Already searched directories (or their subdirs) are not re-searched to avoid redundancy.
+
+    Args:
+        include_headers (List[str]): Header paths extracted from #include lines.
+        c_files (List[str]): List of .c file paths (used to prioritize relevant directories).
+
+    Returns:
+        List[str]: A list of resolved, absolute file paths to each found header.
+    """
+    resolved_paths = []
+    found_headers = set()
+
+    # Create ordered list of unique base directories to search
+    seen_dirs = set()
+    search_dirs = []
+
+    # 1. Directories of the C files
+    for file_path in c_files:
+        dir_path = os.path.abspath(os.path.dirname(file_path))
+        if not any(dir_path.startswith(d + os.sep) or dir_path == d for d in seen_dirs):
+            search_dirs.append(dir_path)
+            seen_dirs.add(dir_path)
+
+    # 2. ./zephyr
+    zephyr = os.path.abspath("./zephyr")
+    if not any(zephyr.startswith(d + os.sep) or zephyr == d for d in seen_dirs):
+        search_dirs.append(zephyr)
+        seen_dirs.add(zephyr)
+
+    # 3. ./nrf
+    nrf = os.path.abspath("./nrf")
+    if not any(nrf.startswith(d + os.sep) or nrf == d for d in seen_dirs):
+        search_dirs.append(nrf)
+        seen_dirs.add(nrf)
+
+    # 4. Entire workspace
+    current_dir = os.path.abspath(".")
+    if not any(current_dir.startswith(d + os.sep) or current_dir == d for d in seen_dirs):
+        search_dirs.append(current_dir)
+        seen_dirs.add(current_dir)
+
+    # Walk and resolve each header
+    for header in include_headers:
+        found = False
+        for base_dir in search_dirs:
+            for root, _, files in os.walk(base_dir, followlinks=False):
+                for file in files:
+                    if file == os.path.basename(header):
+                        full_path = os.path.join(root, file)
+
+                        # Header match = full path must end with the header string
+                        if full_path.endswith(header) and header not in found_headers:
+                            abs_path = os.path.abspath(full_path)
+                            resolved_paths.append(abs_path)
+                            found_headers.add(header)
+                            found = True
+                            break
+                if found:
+                    break
+            if found:
+                break
+        if not found:
+            print(f"Warning: Header '{header}' not found in workspace.")
+
+    # Debug output
+    os.makedirs("debug", exist_ok=True)
+    with open("debug/resolved_include_paths.json", "w", encoding="utf-8") as f:
+        json.dump(resolved_paths, f, indent=2)
+
+    return resolved_paths
 
 def group_out_functions(function_calls: Dict[str, Dict[str, Dict[str, List[str]]]]) -> Tuple[Dict[str, List[str]], List[str]]:
     """
@@ -514,6 +634,7 @@ def finalize_results(updated_grouped, ungrouped):
             ungrouped[fn] = ["No declaration found"]
 
 def extract_declarations_for_known_calls(grouped_functions, single_funcs, layer):
+    # get header include lists for the different c-files
     """
     Searches all .h files under the current directory (recursively),
     as well as specific important headers, to locate valid **function declarations**
