@@ -17,6 +17,7 @@ from out_functions import (
     find_c_files,
     filter_files_with_function_definitions,
     extract_function_calls,
+    resolve_include_paths,
     group_out_functions,
     group_function_calls_by_keyword,
     extract_declarations_for_known_calls
@@ -116,18 +117,9 @@ def main():
     matched_files = filter_files_with_function_definitions(c_files, group_functions)
     # print(matched_files) # Debug print, comment-in if needed
 
-    # Extract all function calls (not necessarily group functions) from those matched .c files
-    function_calls = extract_function_calls(matched_files, layer)
-
-    # Write OUT scan results to a file
-    # # output_file = f"OUT_{layer}.txt"
-    # # with open(output_file, "w", encoding="utf-8") as f:
-    # #     for file, calls in function_calls.items():
-    # #         f.write(f"\nFile: {file}\n")
-    # #         for call, locations in sorted(calls.items()):
-    # #             f.write(f"  {call}:\n")
-    # #             for loc in sorted(locations):
-    # #                 f.write(f"    - {loc}\n")
+    # Extract all function calls from those matched .c files that aren't locally defined,
+    # and get the include headers
+    function_calls, include_headers = extract_function_calls(matched_files, layer)
     # # Debug print, comment-in if needed
     # for file, calls in function_calls.items():
     #     print(f"\nFile: {file}")
@@ -136,7 +128,12 @@ def main():
     #         for loc in sorted(locations):
     #             print(f"    - {loc}")
 
-    # group funcs
+    include_header_paths = resolve_include_paths(include_headers, matched_files)
+    print("Resolved include paths:")
+    for path in include_header_paths:
+        print(path)
+
+    # group functions
     grouped, single_funcs = group_out_functions(function_calls)
     # # Debug print, comment-in if needed
     # print("\ngrouped functions:\n")
@@ -147,10 +144,11 @@ def main():
     # print("\nsingles:\n")
     # for single in single_funcs:
     #     print(single)
-    out_file = f"OUT_{layer}.txt"
-    # write_output_to_file(calls_with_decls, out_grouped_file, layer)
-    with open(out_file, "w", encoding="utf-8") as file:
-        json.dump(grouped, file, indent=4)
+
+    # out_file = f"OUT_{layer}.txt"
+    # # write_output_to_file(calls_with_decls, out_grouped_file, layer)
+    # with open(out_file, "w", encoding="utf-8") as file:
+    #     json.dump(grouped, file, indent=4)
 
     group_calls = extract_declarations_for_known_calls(grouped, single_funcs, layer)
     out_grouped_file = f"OUT_grouped_{layer}.txt"
