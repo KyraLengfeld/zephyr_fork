@@ -3,13 +3,13 @@ import re
 import subprocess
 from general import STANDARD_C_TYPES, is_standard_c_type, find_header_files, extract_comment_above
 
-def find_function_calls(directory, patterns, ignore_paths):
+def find_function_calls(ws_dir, patterns, ignore_paths):
     """
     Searches through .c and .h files for function calls matching given patterns,
     while ignoring specific paths and filenames.
 
     Parameters:
-    - directory (str): The root directory to search in.
+    - ws_dir (str): The root directory to search in.
     - patterns (list of str): Function name fragments to grep for.
     - ignore_paths (list of str): Paths to exclude from results.
 
@@ -24,7 +24,7 @@ def find_function_calls(directory, patterns, ignore_paths):
         function_call_pattern = re.compile(r'\b([a-zA-Z0-9_]*' + escaped_pattern + r'[a-zA-Z0-9_]*)\s*\(')
 
         grep_pattern = rf'\b[a-zA-Z0-9_]*{pattern}[a-zA-Z0-9_]*\s*\('
-        grep_command = f'grep -rnE "{grep_pattern}" {directory} --include="*.c" --include="*.h"'
+        grep_command = f'grep -rnE "{grep_pattern}" {ws_dir} --include="*.c" --include="*.h"'
 
         try:
             grep_output = subprocess.run(grep_command, shell=True, capture_output=True, text=True)
@@ -44,7 +44,7 @@ def find_function_calls(directory, patterns, ignore_paths):
                 matches = function_call_pattern.finditer(code_line)
                 for match_call in matches:
                     function_name = match_call.group(1)
-                    file_path = file_path.replace("./", "")
+                    file_path = file_path.replace(f"{ws_dir}", ".")
                     lookup_table.append({
                         'function_name': function_name,
                         'file_path': file_path,
@@ -227,8 +227,8 @@ def extract_caller_groups(all_groups):
                 for param_name, param_info in params.items():
                     clean_param = param_info.get("clean_param", param_name)
                     desc = param_info.get("description", param_info.get("param", ""))
-                    print("here")
-                    print(f"{desc}")
+                    # print("here")
+                    # print(f"{desc}")
 
                     if clean_param in caller_group_params[caller_group]:
                         caller_group_params[caller_group][clean_param]["groups"].add(group_name)
@@ -244,7 +244,7 @@ def is_standard_c_type(clean_param):
     tokens = re.sub(r'[,*()]', '', clean_param).split()
     return all(tok in STANDARD_C_TYPES or tok in {"const", "volatile"} for tok in tokens)
 
-def add_param_def_info(caller_group_params, header_list, layer, base_dir="."):
+def add_param_def_info(caller_group_params, header_list, layer, base_dir):
     """
     Searches headers for parameter definitions and adds them (and their comments) to the param info.
 

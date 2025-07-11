@@ -70,7 +70,7 @@ def extract_common_folders(header_paths: List[str]) -> List[str]:
 
     return ordered_common
 
-def find_c_files(common_folders: List[str]) -> List[str]:
+def find_c_files(common_folders: List[str], ws_dir: str) -> List[str]:
     """
     Finds all .c source files within folders that include the common folder names in order.
     Excludes any paths containing 'mock', 'test', 'sample', 'classic', or 'shell'.
@@ -82,7 +82,7 @@ def find_c_files(common_folders: List[str]) -> List[str]:
         List[str]: List of matching .c file paths.
     """
     matching_files = []
-    for dirpath, _, filenames in os.walk("."):
+    for dirpath, _, filenames in os.walk(ws_dir):
         # Skip paths containing mock or test directories
         if any(x in dirpath for x in ["mock", "test", "sample", "classic", "shell"]):
             continue
@@ -176,6 +176,7 @@ def detect_include_header(line):
     Ignores:
         - Comments
         - Non-#include lines
+    Note:
         - Duplicates should be filtered externally
 
     Args:
@@ -263,7 +264,7 @@ def detect_function_definition(line, in_macro_block):
 
     return None, False
 
-def extract_function_calls(c_files: List[str], layer: str) -> Dict[str, Dict[str, List[str]]]:
+def extract_function_calls(c_files: List[str], layer: str, ws_dir: str) -> Dict[str, Dict[str, List[str]]]:
     """
     Extracts all valid function calls (excluding definitions, macros, control structures, __* prefixed,
     bt_{layer}/{layer} prefixed, or known non-call macros like memset) from each C file.
@@ -347,7 +348,8 @@ def extract_function_calls(c_files: List[str], layer: str) -> Dict[str, Dict[str
                     file_calls[simplified_call] = [loc]
 
         # Debug, uncomment if needed
-        out_file = f"{os.path.basename(filepath)}.includes.txt"
+        os.makedirs(ws_dir + "/zephyr/z_host_external_arch_docs/debug", exist_ok=True)
+        out_file = ws_dir + "/zephyr/z_host_external_arch_docs/debug/" + f"{os.path.basename(filepath)}.includes.txt"
         with open(out_file, "w", encoding="utf-8") as file:
             json.dump(include_headers, file, indent=4)
         # # Debug, uncomment if needed
@@ -363,7 +365,7 @@ def extract_function_calls(c_files: List[str], layer: str) -> Dict[str, Dict[str
         calls_per_file[filepath] = file_calls
     return calls_per_file, include_headers
 
-def resolve_include_paths(include_headers, c_files):
+def resolve_include_paths(include_headers, c_files, ws_dir):
     """
     Resolves actual file paths for headers found in #include statements.
 
@@ -409,7 +411,7 @@ def resolve_include_paths(include_headers, c_files):
         seen_dirs.add(nrf)
 
     # 4. Entire workspace
-    current_dir = os.path.abspath(".")
+    current_dir = os.path.abspath(ws_dir)
     if not any(current_dir.startswith(d + os.sep) or current_dir == d for d in seen_dirs):
         search_dirs.append(current_dir)
         seen_dirs.add(current_dir)
@@ -438,8 +440,8 @@ def resolve_include_paths(include_headers, c_files):
             print(f"Warning: Header '{header}' not found in workspace.")
 
     # Debug output
-    os.makedirs("debug", exist_ok=True)
-    with open("debug/resolved_include_paths.json", "w", encoding="utf-8") as f:
+    os.makedirs(ws_dir + "/zephyr/z_host_external_arch_docs/debug", exist_ok=True)
+    with open(ws_dir + "/zephyr/z_host_external_arch_docs/debug/resolved_include_paths.json", "w", encoding="utf-8") as f:
         json.dump(resolved_paths, f, indent=2)
 
     return resolved_paths
@@ -500,7 +502,7 @@ def group_function_calls_by_keyword(function_calls: Dict[str, Dict[str, Dict[str
 
     return grouped_calls
 
-def gather_header_files():
+def gather_header_files(ws_dir):
     """
     Recursively walks through the current directory to collect all .h files,
     excluding any paths that contain mock, test, sample, classic, or shell.
@@ -513,7 +515,7 @@ def gather_header_files():
         List of header file paths to be scanned.
     """
     header_files = []
-    for dirpath, _, filenames in os.walk("."):
+    for dirpath, _, filenames in os.walk(ws_dir):
         if any(skip in dirpath for skip in ["mock", "test", "sample", "classic", "shell"]):
             continue
         for file in filenames:
@@ -633,7 +635,7 @@ def finalize_results(updated_grouped, ungrouped):
         if not ungrouped[fn]:
             ungrouped[fn] = ["No declaration found"]
 
-def extract_declarations_for_known_calls(grouped_functions, single_funcs, layer):
+def extract_declarations_for_known_calls(grouped_functions, single_funcs, layer, ws_dir):
     # get header include lists for the different c-files
     """
     Searches all .h files under the current directory (recursively),
@@ -666,7 +668,7 @@ def extract_declarations_for_known_calls(grouped_functions, single_funcs, layer)
     macro_pattern = re.compile(r"^#\s*define\s+([A-Z_][A-Z0-9_]*)\b")
     special_macro_pattern = re.compile(r"^#\s*define\s+([a-z_][a-z0-9_]*)\s*\(", re.IGNORECASE)
 
-    header_files = gather_header_files()
+    header_files = gather_header_files(ws_dir)
 
     for filepath in header_files:
         if not os.path.isfile(filepath):

@@ -248,7 +248,7 @@ def write_output_to_file(function_calls, filepath, layer):
             #             f.write(f"    - {loc}\n")
             # f.write("\n")
 
-def write_caller_group_params_to_file(grouped_funcs, single_funcs, filepath, layer):
+def write_caller_group_params_to_file(grouped_funcs, filepath, layer):
     layer_upper = layer.upper()
 
     with open(filepath, "w", encoding="utf-8") as f:
@@ -276,9 +276,3 @@ def write_caller_group_params_to_file(grouped_funcs, single_funcs, filepath, lay
                 f.write(f"|{clean_param}|{group_str}|{desc}|{def_loc}|\n")
 
             f.write("\n")
-
-        for func in single_funcs:
-
-            f.write("### Ungrouped functions\n\n")
-            f.write(f"|Parameter|{layer_upper} group|Description|Defined at|\n")
-            f.write(f"|---------|-------------|-----------|----------|\n")
