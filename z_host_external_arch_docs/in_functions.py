@@ -155,7 +155,54 @@ def add_usage_to_groups(groups, lookup_table):
                 else:
                     function_dict['usage in WS'] = "None: external header function, can be called by customers or from anywhere."
 
-def extract_caller_groups(all_groups):
+def extract_module(parts, path, layer) -> (str):
+    """
+    Sort the paths into modules. If not in Zephyr or nrf, save full path (from WS)
+    """
+    caller_group = None
+
+    n = 0
+    repo = parts[n]
+    if repo == ".":
+        n += 1
+        repo = parts[n]
+
+    if repo not in {"zephyr", "nrf"}:
+        caller_group = path
+    else:
+        try:
+            if repo == "zephyr":
+                if layer in parts[-1]:
+                    caller_group = f"{layer}  - {repo}"
+                elif parts[n + 1] == "subsys":
+                    if parts[n + 2] == "bluetooth":
+                        if parts[n + 3] == "host":
+                            filename = os.path.basename(path)
+                            caller_group = f"{filename.split('.')[0]} - {repo}"
+                        else:
+                            caller_group = f"{parts[n + 3]} - {repo}"
+                    else:
+                        caller_group = f"{parts[n + 2]} - {repo}"
+                else:
+                    caller_group = f"{parts[n + 1]} - {repo}"
+            elif repo == "nrf":
+                if layer in parts[-1]:
+                    caller_group = f"{layer}  - {repo}"
+                elif parts[n + 1] == "samples":
+                    caller_group = "samples - {repo}"
+                elif parts[n + 1] == "subsys":
+                    if parts[n + 2] == "bluetooth":
+                        caller_group = f"{parts[n + 3]} - {repo}"
+                    else:
+                        caller_group = f"{parts[n + 2]} - {repo}"
+                else:
+                    caller_group = f"{parts[n + 1]} - {repo}"
+        except IndexError:
+            caller_group = path
+
+    return caller_group
+
+def extract_caller_groups(all_groups, layer):
     """
     Analyzes usage paths and extracts unique caller groups and their parameter usage.
 
@@ -163,7 +210,6 @@ def extract_caller_groups(all_groups):
     - caller_groups (set): Unique group names where calls happen.
     - caller_group_params (dict): Mapping from caller group -> param_name -> description, source groups
     """
-    caller_groups = set()
     caller_group_params = {}
 
     for group in all_groups.values():
@@ -184,42 +230,10 @@ def extract_caller_groups(all_groups):
                 if len(parts) < 2:
                     continue
 
-                repo = parts[0]
-                caller_group = None
-
-                if repo not in {"zephyr", "nrf"}:
-                    caller_group = path
-                else:
-                    try:
-                        if repo == "zephyr":
-                            if parts[1] == "subsys":
-                                if parts[2] == "bluetooth":
-                                    if parts[3] == "host":
-                                        filename = os.path.basename(path)
-                                        caller_group = f"{filename.split('.')[0]} - zephyr"
-                                    else:
-                                        caller_group = f"{parts[3]} - zephyr"
-                                else:
-                                    caller_group = f"{parts[2]} - zephyr"
-                            else:
-                                caller_group = f"{parts[1]} - zephyr"
-                        elif repo == "nrf":
-                            if parts[1] == "samples":
-                                caller_group = "samples - nrf"
-                            elif parts[1] == "subsys":
-                                if parts[2] == "bluetooth":
-                                    caller_group = f"{parts[3]} - nrf"
-                                else:
-                                    caller_group = f"{parts[2]} - nrf"
-                            else:
-                                caller_group = f"{parts[1]} - nrf"
-                    except IndexError:
-                        caller_group = path
+                caller_group = extract_module(parts, path, layer)
 
                 if not caller_group or caller_group.lower() == "none":
                     continue
-
-                caller_groups.add(caller_group)
                 if caller_group not in caller_group_params:
                     caller_group_params[caller_group] = {}
 
@@ -238,13 +252,13 @@ def extract_caller_groups(all_groups):
                             "groups": {group_name}
                         }
 
-    return caller_groups, caller_group_params
+    return caller_group_params
 
 def is_standard_c_type(clean_param):
     tokens = re.sub(r'[,*()]', '', clean_param).split()
     return all(tok in STANDARD_C_TYPES or tok in {"const", "volatile"} for tok in tokens)
 
-def add_param_def_info(caller_group_params, header_list, layer, base_dir):
+def add_param_def_info(caller_group_params, header_list, layer, base_dir): ##### Need to improve, streamline, and understand this, so I can correctly print the tables!
     """
     Searches headers for parameter definitions and adds them (and their comments) to the param info.
 
@@ -263,8 +277,12 @@ def add_param_def_info(caller_group_params, header_list, layer, base_dir):
         if caller_group == layer:
             continue
         # Determine base folder from caller group name
-        base_key = caller_group.split(" - ")[0]
-        calling_headers = find_header_files(base_dir, base_key)
+        if " - " not in caller_group:
+            base_key = caller_group.split("/")[0] if caller_group.split("/")[0] != "." else caller_group.split("/")[1]
+        else:
+            base_key = caller_group.split(" - ")[1]
+        calling_headers = find_header_files(base_dir, base_key) #This gets A BUNCH of headers. Investigate
+        print(calling_headers)
 
         for param_name, info in params.items():
             clean_param = param_name
@@ -320,7 +338,11 @@ def add_param_def_info(caller_group_params, header_list, layer, base_dir):
                                 info["def_location"] = f"{os.path.relpath(header, base_dir)}:{idx + 1}"
 
                                 # Add comment only if relevant
+                                # print()
+                                # print("Before")
                                 if comment:
+                                    # print("If comment")
+                                    # print(info["description"])
                                     if "None" in info["description"]:
                                         info["description"] = comment
                                     else:
@@ -328,6 +350,10 @@ def add_param_def_info(caller_group_params, header_list, layer, base_dir):
                                 else:
                                     if not info["description"]:
                                         info["description"] = "None available"
+
+                                # print("After")
+                                # print(info["description"])
+                                # print()
                                 found = True
                                 break
                         if found:

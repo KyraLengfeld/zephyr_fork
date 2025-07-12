@@ -1,5 +1,6 @@
 
 from typing import List, Dict
+import json
 
 def print_functions_simple(all_groups, layer):
     general_filename = f"{layer}_functions.txt"
@@ -178,7 +179,7 @@ def add_usage_to_groups(groups, lookup_table):
                 else:
                     function_dict['usage in WS'] = "None: external header function, can be called by customers or from anywhere."
 
-def write_in_info(all_groups, output_path):
+def write_in_info(all_groups, output_path, all_groups_file_name):
     """
     Write info about the chosen layer's function to a text file.
 
@@ -187,12 +188,18 @@ def write_in_info(all_groups, output_path):
                            with group metadata (e.g., name, header_path, and list of functions).
                            Each function entry includes keys like 'full_function', 'func_name',
                            'description', 'parameters', and 'usage in WS'.
-        output_path (str): Path to the output text file to be written.
+        output_path (str): Path to the output file to be written.
+        all_groups_file_name (str):
+                           Name of the output file.
 
     Returns:
-        None. Writes formatted content to the specified file.
+        None. Writes formatted content to the specified file(s).
     """
-    with open(output_path, "w") as f:
+    txt_file = output_path + "/" + all_groups_file_name + ".txt"
+    json_file = output_path + "/" + all_groups_file_name + ".json"
+    clean_group = {}
+
+    with open(txt_file, "w") as f:
         for group_key, group in all_groups.items():
             f.write(f"Group: {group['name']}\n")
             f.write(f"Header: {group['header_path']}\n\n")
@@ -223,6 +230,38 @@ def write_in_info(all_groups, output_path):
                 f.write("\n")  # space between functions
             f.write("\n" + "="*60 + "\n\n")  # separator between groups
 
+    for _, group in all_groups.items():
+        group_name = group["name"]
+        clean_group_group = {
+            "header_path": group.get("header_path", ""),
+            "functions": {}
+        }
+
+        for func in group.get("functions", []):
+            func_name = func["func_name"]
+            clean_group_func = {
+                "full_function": func.get("full_function", ""),
+                "description": func.get("description", ""),
+                "parameters": {},
+                "usage in WS": {path: {} for path in func.get("usage in WS", [])}
+            }
+
+            for param_key, param_info in func.get("parameters", {}).items():
+                clean_param = param_info.get("clean_param", param_key)
+                param_entry = {}
+
+                if "description" in param_info:
+                    param_entry["description"] = param_info["description"]
+
+                clean_group_func["parameters"][clean_param] = param_entry
+
+            clean_group_group["functions"][func_name] = clean_group_func
+
+        clean_group[group_name] = clean_group_group
+
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump(clean_group, f, indent=4, ensure_ascii=False)
+
 def write_output_to_file(function_calls, filepath, layer):
     layer_upper = layer.upper()
 
@@ -249,6 +288,19 @@ def write_output_to_file(function_calls, filepath, layer):
             # f.write("\n")
 
 def write_caller_group_params_to_file(grouped_funcs, filepath, layer):
+    """
+    Write info about the chosen layer's XXX to a text file. To be copied into a confluence page.
+
+    Note: Tables should automatically be created in confluence.
+
+    Args:
+        grouped_funcs (dict): A dictionary where XXX
+        filepath (str): Path to the output txt file to be written.
+        layer (str):          Layer this is done for.
+
+    Returns:
+        None. Writes formatted content to the specified file.
+    """
     layer_upper = layer.upper()
 
     with open(filepath, "w", encoding="utf-8") as f:

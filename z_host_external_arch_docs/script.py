@@ -87,16 +87,22 @@ def main():
     add_usage_to_groups(all_groups, lookup_table)
 
     # Save the grouped IN info
-    all_groups_file = generated_docs_dir + f"/IN_{layer}_functions_info.txt"
-    write_in_info(all_groups, (all_groups_file))
+    all_groups_file_name = f"IN_{layer}_functions_info"
+    write_in_info(all_groups, generated_docs_dir ,all_groups_file_name)
 
     # Extract caller groups and params, then enrich with param type/def info
-    caller_groups, caller_group_params = extract_caller_groups(all_groups)
+    caller_group_params = extract_caller_groups(all_groups, layer)
+    # # Debug print caller_group_params, comment-in if needed
+    # import pprint
+    # pprint.pprint(caller_group_params)
+
     grouped_params = add_param_def_info(caller_group_params, header_list, layer, ws_dir)
+    # import pprint
+    # pprint.pprint(grouped_params)
 
     # Save grouped param definitions
     in_grouped_params_file = generated_docs_dir + f"/IN_grouped_{layer}_params.txt"
-    write_caller_group_params_to_file(grouped_params, (in_grouped_params_file), layer)
+    write_caller_group_params_to_file(grouped_params, in_grouped_params_file, layer)
 
     ####### Try with CONN, there might be MAAANY c-files, because of the different function names, so make it user interactible.
     ########## Need to fix these!
