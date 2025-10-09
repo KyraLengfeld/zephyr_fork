@@ -449,6 +449,9 @@ macro(zephyr_library_get_current_dir_lib_name base lib_name)
   # Replace : with __ (C:/zephyrproject => C____zephyrproject)
   string(REGEX REPLACE ":" "__" name ${name})
 
+  # Replace ~ with - (driver~serial => driver-serial)
+  string(REGEX REPLACE "~" "-" name ${name})
+
   set(${lib_name} ${name})
 endmacro()
 
@@ -1316,6 +1319,7 @@ function(zephyr_linker_sources location)
   set(rom_sections_path  "${snippet_base}/snippets-rom-sections.ld")
   set(ram_sections_path  "${snippet_base}/snippets-ram-sections.ld")
   set(data_sections_path "${snippet_base}/snippets-data-sections.ld")
+  set(text_sections_path "${snippet_base}/snippets-text-sections.ld")
   set(rom_start_path     "${snippet_base}/snippets-rom-start.ld")
   set(noinit_path        "${snippet_base}/snippets-noinit.ld")
   set(rwdata_path        "${snippet_base}/snippets-rwdata.ld")
@@ -1336,6 +1340,7 @@ function(zephyr_linker_sources location)
     file(WRITE ${rom_sections_path} "")
     file(WRITE ${ram_sections_path} "")
     file(WRITE ${data_sections_path} "")
+    file(WRITE ${text_sections_path} "")
     file(WRITE ${rom_start_path} "")
     file(WRITE ${noinit_path} "")
     file(WRITE ${rwdata_path} "")
@@ -1359,6 +1364,8 @@ function(zephyr_linker_sources location)
     set(snippet_path "${ram_sections_path}")
   elseif("${location}" STREQUAL "DATA_SECTIONS")
     set(snippet_path "${data_sections_path}")
+  elseif("${location}" STREQUAL "TEXT_SECTIONS")
+    set(snippet_path "${text_sections_path}")
   elseif("${location}" STREQUAL "ROM_START")
     set(snippet_path "${rom_start_path}")
   elseif("${location}" STREQUAL "NOINIT")
@@ -4702,6 +4709,7 @@ function(zephyr_dt_import)
   zephyr_check_arguments_required_all(${CMAKE_CURRENT_FUNCTION} arg ${req_single_args})
 
   set(gen_dts_cmake_script ${ZEPHYR_BASE}/scripts/dts/gen_dts_cmake.py)
+  set(gen_dts_cmake_temp ${arg_EDT_PICKLE_FILE}.cmake.new)
   set(gen_dts_cmake_output ${arg_EDT_PICKLE_FILE}.cmake)
 
   if((${arg_EDT_PICKLE_FILE} IS_NEWER_THAN ${gen_dts_cmake_output}) OR
@@ -4710,11 +4718,13 @@ function(zephyr_dt_import)
     execute_process(
       COMMAND ${PYTHON_EXECUTABLE} ${gen_dts_cmake_script}
       --edt-pickle ${arg_EDT_PICKLE_FILE}
-      --cmake-out ${gen_dts_cmake_output}
+      --cmake-out ${gen_dts_cmake_temp}
       WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
       RESULT_VARIABLE ret
       COMMAND_ERROR_IS_FATAL ANY
     )
+
+    zephyr_file_copy(${gen_dts_cmake_temp} ${gen_dts_cmake_output} ONLY_IF_DIFFERENT)
   endif()
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${gen_dts_cmake_script})
 
@@ -5933,7 +5943,7 @@ function(add_llext_target target_name)
   # dynamic library.
   set(llext_proc_target ${target_name}_llext_proc)
   set(llext_pkg_input ${PROJECT_BINARY_DIR}/llext/${target_name}_debug.elf)
-  add_custom_target(${llext_proc_target} DEPENDS ${llext_pkg_input})
+  add_custom_target(${llext_proc_target} DEPENDS ${llext_lib_target} ${llext_lib_output})
   set_property(TARGET ${llext_proc_target} PROPERTY has_post_build_cmds 0)
 
   # By default this target must copy the `lib_output` binary file to the
@@ -5945,7 +5955,7 @@ function(add_llext_target target_name)
   add_custom_command(
     OUTPUT ${llext_pkg_input}
     COMMAND "$<IF:${has_post_build_cmds},${noop_cmd},${copy_cmd}>"
-    DEPENDS ${llext_lib_target} ${llext_lib_output}
+    DEPENDS ${llext_proc_target}
     COMMAND_EXPAND_LISTS
   )
 
@@ -5965,9 +5975,24 @@ function(add_llext_target target_name)
     set(slid_inject_cmd ${CMAKE_COMMAND} -E true)
   endif()
 
+  # When using the arcmwdt toolchain, the compiler may emit hundreds of
+  # .arcextmap.* sections that bloat the shstrtab. stripac removes
+  # these sections, but it does not remove their names from the shstrtab.
+  # Use GNU strip to remove these sections beforehand.
+  if (${ZEPHYR_TOOLCHAIN_VARIANT} STREQUAL "arcmwdt")
+    set(gnu_strip_for_mwdt_cmd
+      ${CMAKE_GNU_STRIP}
+      --remove-section=.arcextmap* --strip-unneeded
+      ${llext_pkg_input}
+    )
+  else()
+    set(gnu_strip_for_mwdt_cmd ${CMAKE_COMMAND} -E true)
+  endif()
+
   # Remove sections that are unused by the llext loader
   add_custom_command(
     OUTPUT ${llext_pkg_output}
+    COMMAND ${gnu_strip_for_mwdt_cmd}
     COMMAND $<TARGET_PROPERTY:bintools,elfconvert_command>
             $<TARGET_PROPERTY:bintools,elfconvert_flag>
             $<TARGET_PROPERTY:bintools,elfconvert_flag_strip_unneeded>
@@ -5977,7 +6002,7 @@ function(add_llext_target target_name)
             $<TARGET_PROPERTY:bintools,elfconvert_flag_outfile>${llext_pkg_output}
             $<TARGET_PROPERTY:bintools,elfconvert_flag_final>
     COMMAND ${slid_inject_cmd}
-    DEPENDS ${llext_proc_target} ${llext_pkg_input}
+    DEPENDS ${llext_pkg_input}
     COMMAND_EXPAND_LISTS
   )
 

@@ -77,6 +77,21 @@ void sys_trace_k_thread_priority_set(struct k_thread *thread)
 				    thread->base.prio, name);
 }
 
+void sys_trace_k_thread_sleep_enter(k_timeout_t timeout)
+{
+	ctf_top_thread_sleep_enter(
+		k_ticks_to_us_floor32((uint32_t)timeout.ticks)
+		);
+}
+
+void sys_trace_k_thread_sleep_exit(k_timeout_t timeout, int ret)
+{
+	ctf_top_thread_sleep_exit(
+		k_ticks_to_us_floor32((uint32_t)timeout.ticks),
+		(uint32_t)ret
+		);
+}
+
 void sys_trace_k_thread_create(struct k_thread *thread, size_t stack_size, int prio)
 {
 	ctf_bounded_string_t name = { "unknown" };
@@ -428,7 +443,7 @@ void sys_trace_socket_accept_enter(int sock)
 }
 
 void sys_trace_socket_accept_exit(int sock, const struct sockaddr *addr,
-				  const size_t *addrlen, int ret)
+				  const uint32_t *addrlen, int ret)
 {
 	ctf_net_bounded_string_t addr_str = { "unknown" };
 	uint32_t addr_len = 0U;
@@ -448,7 +463,7 @@ void sys_trace_socket_accept_exit(int sock, const struct sockaddr *addr,
 }
 
 void sys_trace_socket_sendto_enter(int sock, int len, int flags,
-				   const struct sockaddr *dest_addr, size_t addrlen)
+				   const struct sockaddr *dest_addr, uint32_t addrlen)
 {
 	ctf_net_bounded_string_t addr_str = { "unknown" };
 
@@ -489,7 +504,7 @@ void sys_trace_socket_sendmsg_exit(int sock, int ret)
 }
 
 void sys_trace_socket_recvfrom_enter(int sock, int max_len, int flags,
-				     struct sockaddr *addr, size_t *addrlen)
+				     struct sockaddr *addr, uint32_t *addrlen)
 {
 	ctf_top_socket_recvfrom_enter(sock, max_len, flags,
 				      (uint32_t)(uintptr_t)addr,
@@ -497,7 +512,7 @@ void sys_trace_socket_recvfrom_enter(int sock, int max_len, int flags,
 }
 
 void sys_trace_socket_recvfrom_exit(int sock, const struct sockaddr *src_addr,
-				    const size_t *addrlen, int ret)
+				    const uint32_t *addrlen, int ret)
 {
 	ctf_net_bounded_string_t addr_str = { "unknown" };
 	int len = 0;
@@ -616,7 +631,7 @@ void sys_trace_socket_getpeername_enter(int sock)
 }
 
 void sys_trace_socket_getpeername_exit(int sock,  struct sockaddr *addr,
-				       const size_t *addrlen, int ret)
+				       const uint32_t *addrlen, int ret)
 {
 	ctf_net_bounded_string_t addr_str;
 
@@ -632,7 +647,7 @@ void sys_trace_socket_getsockname_enter(int sock)
 }
 
 void sys_trace_socket_getsockname_exit(int sock, const struct sockaddr *addr,
-				       const size_t *addrlen, int ret)
+				       const uint32_t *addrlen, int ret)
 {
 	ctf_net_bounded_string_t addr_str;
 

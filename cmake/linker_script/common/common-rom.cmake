@@ -12,9 +12,8 @@ zephyr_linker_section_obj_level(SECTION init LEVEL APPLICATION)
 zephyr_linker_section_obj_level(SECTION init LEVEL SMP)
 
 zephyr_iterable_section(NAME device NUMERIC KVMA RAM_REGION GROUP RODATA_REGION)
-zephyr_iterable_section(NAME service NUMERIC KVMA RAM_REGION GROUP RODATA_REGION)
 
-if(CONFIG_GEN_SW_ISR_TABLE AND NOT CONFIG_DYNAMIC_INTERRUPTS)
+if(CONFIG_GEN_SW_ISR_TABLE AND NOT CONFIG_SRAM_SW_ISR_TABLE)
   # ld align has been changed to subalign to provide identical behavior scatter vs. ld.
   zephyr_linker_section(NAME sw_isr_table KVMA FLASH GROUP RODATA_REGION SUBALIGN ${CONFIG_ARCH_SW_ISR_TABLE_ALIGN} NOINPUT)
   zephyr_linker_section_configure(
@@ -153,6 +152,10 @@ if(CONFIG_SENSOR_ASYNC_API)
   zephyr_iterable_section(NAME sensor_decoder_api KVMA RAM_REGION GROUP RODATA_REGION)
 endif()
 
+if(CONFIG_ADC_STREAM)
+  zephyr_iterable_section(NAME adc_decoder_api KVMA RAM_REGION GROUP RODATA_REGION)
+endif()
+
 if(CONFIG_MCUMGR)
   zephyr_iterable_section(NAME mcumgr_handler KVMA RAM_REGION GROUP RODATA_REGION)
 endif()
@@ -231,6 +234,13 @@ if (CONFIG_NET_MGMT)
   zephyr_iterable_section(NAME net_mgmt_event_static_handler KVMA RAM_REGION GROUP RODATA_REGION)
 endif()
 
+if(CONFIG_NET_SOCKETS_SERVICE)
+  zephyr_iterable_section(NAME net_socket_service_desc
+                          KVMA RAM_REGION GROUP RODATA_REGION
+                          SUBALIGN ${CONFIG_LINKER_ITERABLE_SUBALIGN}
+  )
+endif()
+
 if(CONFIG_INPUT)
   zephyr_iterable_section(NAME input_callback KVMA RAM_REGION GROUP RODATA_REGION)
 endif()
@@ -258,4 +268,8 @@ endif()
 
 if(CONFIG_GNSS_SATELLITES)
   zephyr_iterable_section(NAME gnss_satellites_callback KVMA RAM_REGION GROUP RODATA_REGION)
+endif()
+
+if(CONFIG_GNSS_RTK)
+  zephyr_iterable_section(NAME gnss_rtk_data_callback KVMA RAM_REGION GROUP RODATA_REGION)
 endif()

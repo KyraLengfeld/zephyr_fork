@@ -8,4 +8,9 @@ toolchain:
 supported:
   - uart
   - gpio
+  - pwm
+  - adc
+  - i2c
+  - counter
+  - mbox
 vendor: renesas
